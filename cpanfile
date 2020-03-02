@@ -10,6 +10,7 @@ on develop => sub {
 
 on test => sub {
     requires 'FindBin';
+    requires 'Path::Tiny';
     requires 'Test::More';
 };
 

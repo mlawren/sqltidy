@@ -1,40 +1,29 @@
 #!/usr/bin/perl
-
 use strict;
 use warnings;
-
 use FindBin qw/$Bin/;
+use Path::Tiny;
+use SQL::Tree;
 use Test::More;
 
-##################################################
+path( $Bin, 'data' )->visit(
+    \&check_tidy,
+    {
+        recurse         => 1,
+        follow_symlinks => 0,
+    }
+);
 
-# Check each file to make sure it hasn't changed from the canonical tidy
+sub check_tidy {
+    my $file = shift;
+    return unless -f $file and $file =~ m/\.sql$/;
 
-for my $file ( glob("$Bin/data/*.sql") ) {
+    my $sql  = $file->slurp_utf8;
+    my $want = path( $file . '.tdy.canonical' )->slurp_utf8;
+    my $tree = SQL::Tree->new($sql);
+    my $tidy = $tree->pretty;
 
-    chdir("$Bin/data");
-    `$Bin/../bin/sqltidy $file`;
-
-    my $tidied   = read_file("$file.tdy");
-    my $expected = read_file("$file.tdy.canonical");
-
-    is( $tidied, $expected, "Tidier for |$file| matches." );
-
-    unlink "$file.tdy" or warn "Couldn't unlink |$file.tdy|.\n";
+    is $tidy, $want, $file->basename;
 }
 
 done_testing();
-
-##################################################
-
-sub read_file {
-    my ($filename) = @_;
-    if ( open( my $file, $filename ) ) {
-        local $/ = undef;
-        return <$file>;
-    }
-    else {
-        warn "Couldn't open file |$filename| for reading.\n";
-        return undef;
-    }
-}
