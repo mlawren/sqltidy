@@ -502,6 +502,7 @@ sub _get_tokens {
 sub _token_to_sub_name {
     my ( $self, $token ) = @_;
 
+    $token = lc $token;
     if ( $token eq '/' ) {
         $token = 'SLASH';
     }
@@ -521,6 +522,8 @@ sub _is_multiword_token {
 
     return 0 unless @$all_tokens;
     my $first = $all_tokens->[-1];
+    $first  = lc $first;
+    $second = lc $second;
 
     my @multiword_tokens = (
         "select distinct",
