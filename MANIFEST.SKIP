@@ -1,0 +1,13 @@
+\.direnv
+\.envrc
+\.git
+\.perltidyrc
+\.podtidy-opts
+\.readme_from
+^blib
+^SQL-Tree-*
+Makefile$
+MANIFEST.SKIP
+\.bak$
+MYMETA
+pm_to_blib

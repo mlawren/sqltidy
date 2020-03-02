@@ -13,7 +13,7 @@ use Test::More;
 for my $file ( glob("$Bin/data/*.sql") ) {
 
     chdir("$Bin/data");
-    `$Bin/../sqltidy $file`;
+    `$Bin/../bin/sqltidy $file`;
 
     my $tidied   = read_file("$file.tdy");
     my $expected = read_file("$file.tdy.canonical");
