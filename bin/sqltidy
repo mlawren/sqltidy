@@ -1,177 +1,167 @@
 #!/usr/bin/perl
-
 use strict;
 use warnings;
-use SQL::Tree;
+use OptArgs2;
+use FindBin '$Bin';
+use lib "$Bin/../lib";
 
 our $VERSION = '0.2';
 
-use Getopt::Long;
+cmd 'App::sqltidy' => (
+    comment => 'SQL formatter',
+    optargs => sub {
+        arg file => (
+            isa     => 'Str',
+            comment => 'file containing SQL to tidy',
+        );
 
-my %options = ();
-GetOptions(
-    'help'            => \$options{'help'},
-    'double-escape'   => \$options{'double-escape'},
-    'preserve-indent' => \$options{'preserve-indent'},
-    'editor-mode'     => \$options{'editor-mode'},
-    'no-editor-mode'  => \$options{'no-editor-mode'},
+        opt help => (
+            isa     => 'Flag',
+            alias   => 'h',
+            ishelp  => 1,
+            comment => 'print full usage and exit',
+        );
+
+        opt double_escape => (
+            isa     => 'Flag',
+            comment => 'x',
+        );
+
+        opt indent => (
+            isa     => 'Str',
+            default => '    ',
+            comment => 'string to indent with',
+        );
+
+        opt no_preserve_leading => (
+            isa     => 'Flag',
+            alias   => 'P',
+            comment => 'x',
+        );
+
+        opt editor_mode => (
+            isa     => 'Bool',
+            comment => 'x',
+        );
+
+        opt sql => (
+            isa     => 'Str',
+            alias   => 's',
+            comment => 'input SQL',
+            hidden  => 1,
+        );
+    },
 );
 
-if ( $options{'help'} ) {
-    print << "_HELP_";
+my ( undef, $opts ) = class_optargs('App::sqltidy');
 
-    Usage: $0 [options] [file]
+if ( exists $opts->{file} ) {
+    require Path::Tiny;
+    $opts->{sql} = Path::Tiny::path( $opts->{file} )->slurp_utf8;
+}
+elsif ( not exists $opts->{sql} ) {
 
-    This tool takes SQL and reformats it in an aesthetically pleasing way.
-    It can be run stand-alone (passing a file as an argument) or can be run
-    in-place on code in your text editor.
-
-    FILE
-
-    If a filename is passed as an argument to the script, the script will
-    non-destructively create a new, tidied version of the file, with the
-    extension .tdy appended to the original filename.
-
-    If a filename is not passed, then the script will read from STDIN and
-    output the tidied SQL to STDOUT.  This makes it suitable for in-place
-    edits in your favorite text editor.  In this case, double-escape and
-    preserve-indent are enabled by default unless explicitly calling
-    --no-editor-mode.
-
-    This is the same behavior as perltidy.
-
-    OPTIONS
-
-    --help              Displays this help message.
-
-    --double-escape     Expect two escape characters (\\\\) instead of just
-                        one. This may be needed if your sql is embedded in
-                        another language, which requires that the escape
-                        character itself be escaped.
-
-    --preserve-indent   Preserve the indentation in the existing file.
-                        This sets the indentation to be the least-indented
-                        line of the SQL statement.
-
-    --editor-mode       Enable both --double-escape and --preserve-indent
-                        options, making it suitable for being called from
-                        Perl in the same way as perltidy.  Enabled by
-                        default when invoked without a file (using STDIN).
-
-    --no-editor-mode    Don't invoke editor mode by default when calling
-                        sqltidy without a file.
-_HELP_
-    exit;
+    # read from STDIN
+    local $/ = undef;
+    $opts->{sql} = <>;
 }
 
-## File name is optionally passed in as an argument
+require SQL::Tree;
+my $tree = SQL::Tree->new(
+    double_escape    => $opts->{double_escape},
+    indent           => $opts->{indent},
+    preserve_leading => !$opts->{no_preserve_leading},
+    uppercase        => $opts->{uppercase},
+);
 
-my $filename = $ARGV[0];
+my $output = $tree->tidy( $opts->{sql} );
 
-## If SQL is from STDIN, or editor-mode is set, set two additional flags.
-## If no-editor-mode is set, don't add these flags on STDIN input.
-
-if ( $options{'editor-mode'} or ( !$filename && !$options{'no-editor-mode'} ) )
-{
-    $options{'double-escape'}   = 1;
-    $options{'preserve-indent'} = 1;
-}
-
-##################################################
-
-## Get the original SQL - read from STDIN if filename is undef
-
-my $sql = _get_raw_sql($filename);
-
-## Parse the SQL and generate the new SQL
-
-my $tree   = new SQL::Tree($sql);
-my $output = $tree->pretty();
-
-## Post-processing steps with additional formatting
-
-$output = _double_escape($output)           if $options{'double-escape'};
-$output = _preserve_indent( $output, $sql ) if $options{'preserve-indent'};
-
-## Print to file.tdy, or STDOUT if it was originally from STDIN
-
-if ($filename) {
-    _save_file( $output, "$filename.tdy" );
+if ( $opts->{file} ) {
+    Path::Tiny::path( $opts->{file} . '.tdy' )
+      ->spew_utf8( $tree->tidy( $opts->{sql} ) );
 }
 else {
-    print $output;
+    print $tree->tidy( $opts->{sql} );
 }
 
-##################################################
+__END__
 
-sub _get_raw_sql {
-    my ($filename) = @_;
+=head1 NAME
 
-    my $sql = undef;
+sqltidy - format and indent SQL text
 
-    if ($filename) {
+=head1 SYNOPSIS
 
-        # try to open the file and read in the data
-        if ( open( my $file, $filename ) ) {
-            local $/ = undef;
-            my $sql = <$file>;
-            return $sql;
-        }
-        else {
-            die "ERROR: Could not open file |$filename| for reading.\n";
-        }
-    }
-    else {
-        # read from STDIN
-        local $/ = undef;
-        $sql = <>;
-    }
+    sqltidy [FILE] [OPTIONS...]
 
-    return $sql;
-}
+=head1 DESCRIPTION
 
-sub _save_file {
-    my ( $output, $filename ) = @_;
+The B<sqltidy> tool reformat SQL in an aesthetically pleasing way.  It can
+be run stand-alone (passing a file as an argument) or can be run
+in-place on code in your text editor.
 
-    if ( open( my $file, '>', $filename ) ) {
-        print $file $output;
-        close $file;
-    }
-    else {
-        die "Couldn't open |$filename| for writing.\n";
-    }
-}
+If C<FILE> is passed as an argument to the script, the script will
+non-destructively create a new, tidied version of the file, with the
+extension .tdy appended to the original filename.
 
-sub _double_escape {
-    my ($output) = @_;
+If a filename is not passed, then the script will read from STDIN and
+output the tidied SQL to STDOUT.  This makes it suitable for in-place
+edits in your favorite text editor.  In this case, the C<--double-escape>
+and C<--preserve-indent> options are enabled by default unless
+an explicit C<--no-editor-mode> is used.
 
-    # \ becomes \\
-    $output =~ s!\\!\\\\!igs;
+This is the same behavior as perltidy.
 
-    return $output;
-}
+=head1 OPTIONS
 
-sub _preserve_indent {
-    my ( $output, $original ) = @_;
+=over
 
-    # find the index of the left-most non-space character on any line
-    my $min_length = 10**10;
-    for ( split /\n/, $original ) {
-        /^(\s+)/;
-        my $cur_length = $1 ? length($1) : 0;
-        $min_length = $cur_length < $min_length ? $cur_length : $min_length;
+=item --help
 
-        # shortcut out if we find a zero-indent line
-        return $output if $min_length == 0;
-    }
+Print a help message and exit.
 
-    # indent everything by that much
-    my $new_output = '';
-    my $indent     = " " x $min_length;
+=item --double-escape
 
-    for ( split /\n/, $output ) {
-        $new_output .= "$indent$_\n";
-    }
+Expect two escape characters (\\\\) instead of just one. This may be
+needed if your sql is embedded in another language, which requires that
+the escape character itself be escaped.
 
-    return $new_output;
-}
+=item --preserve-indent
+
+Preserve the indentation in the existing file.  This sets the
+indentation to be the least-indented line of the SQL statement.
+
+=item --editor-mode
+
+Enable both --double-escape and --preserve-indent options, making it
+suitable for being called from Perl in the same way as perltidy.
+Enabled by default when invoked without a file (using STDIN).
+
+=item --no-editor-mode
+
+Don't invoke editor mode by default when calling sqltidy without a
+file.
+
+=back
+
+=head1 EXIT VALUE
+
+This command exists with a value of 0 on success.
+
+=head1 SEE ALSO
+
+B<sqltidy> is a wrapper around the Perl L<SQL::Tree> package.
+
+=head1 AUTHOR
+
+Mark Lawrence E<lt>nomad@null.netE<gt> wrote this version of sqltidy
+based on the original script by Ryan Kosai <github@ryankosai.com>.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2020 Mark Lawrence <nomad@null.net>
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation; either version 3 of the License, or (at your
+option) any later version.
