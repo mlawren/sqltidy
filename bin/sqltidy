@@ -100,7 +100,8 @@ if ( $opts->{file} ) {
         Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
     }
     else {
-        Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
+        #    Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
+        print $output;
     }
 }
 else {
