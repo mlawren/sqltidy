@@ -5,10 +5,10 @@ use 5.010;
 use ExtUtils::MakeMaker::CPANfile;
 
 WriteMakefile(
-    NAME         => 'SQL::Tree',
+    NAME         => 'SQL::Tidy',
     ABSTRACT     => 'Parse and prettify SQL text',
     AUTHOR       => 'Mark Lawrence <nomad@null.net>',
-    VERSION_FROM => 'lib/SQL/Tree.pm',
+    VERSION_FROM => 'lib/SQL/Tidy.pm',
     LICENSE      => 'gpl_3',
     EXE_FILES    => ['bin/sqltidy'],
     test         => {
@@ -18,12 +18,12 @@ WriteMakefile(
         'meta-spec' => { version => 2 },
         resources   => {
             bugtracker =>
-              { web => 'https//github.com/mlawren/p5-SQL-Tree/issues', },
-            homepage   => 'https//github.com/mlawren/p5-SQL-Tree',
+              { web => 'https//github.com/mlawren/p5-SQL-Tidy/issues', },
+            homepage   => 'https//github.com/mlawren/p5-SQL-Tidy',
             repository => {
                 type => 'git',
-                url  => 'ssh://git@github.com/mlawren/p5-SQL-Tree.git',
-                web  => 'https//github.com/mlawren/p5-SQL-Tree',
+                url  => 'ssh://git@github.com/mlawren/p5-SQL-Tidy.git',
+                web  => 'https//github.com/mlawren/p5-SQL-Tidy',
             }
         },
     },

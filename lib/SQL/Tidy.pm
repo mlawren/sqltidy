@@ -829,17 +829,15 @@ __END__
 
 =head1 NAME
 
-SQL::Tree - parse and prettify SQL text
+SQL::Tidy - parse and prettify SQL text
 
 =head1 SYNOPSIS
 
-    use SQL::Tree;
-    my $tree   = SQL::Tree->new(
-        indent    => '    ',
-        sql       => $sql,
-        uppercase => 1,
+    use SQL::Tidy;
+    my $sqlt   = SQL::Tidy->new(
+        indent    => 4,
     );
-    my $tidy = $tree->pretty();
+    my $sql = $sqlt->parse($SQL);
 
 =head1 DESCRIPTION
 
@@ -871,7 +869,7 @@ Set to uppercase SQL keywords when tidying.
 
 =over
 
-=item tidy($sql) -> $tidy_sql
+=item parse($sql) -> $tidy_sql
 
 Takes the input SQL text to be parsed and returns a tidy version.
 
@@ -879,12 +877,9 @@ Takes the input SQL text to be parsed and returns a tidy version.
 
 =head1 AUTHOR
 
-Originally by Ryan Kosai <github@ryankosai.com>. Modularized with more
-features by Mark Lawrence <nomad@null.net>.
+Mark Lawrence <nomad@null.net>.
 
 =head1 COPYRIGHT AND LICENSE
-
-Copyright 2011 Ryan Kosai <github@ryankosai.com>
 
 Copyright 2020 Mark Lawrence <nomad@null.net>
 

@@ -181,7 +181,7 @@ This command exists with a value of 0 on success.
 
 =head1 SEE ALSO
 
-B<sqltidy> is a wrapper around the Perl L<SQL::Tree> package.
+B<sqltidy> is a wrapper around the Perl L<SQL::Tidy> package.
 
 =head1 AUTHOR
 

@@ -5,7 +5,7 @@
 \.podtidy-opts
 \.readme_from
 ^blib
-^SQL-Tree-*
+^SQL-Tidy-*
 Makefile$
 MANIFEST.SKIP
 \.bak$
