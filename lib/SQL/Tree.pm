@@ -1,7 +1,7 @@
 package SQL::Tree;
 use strict;
 use warnings;
-use constant DEBUG => 1;
+use constant DEBUG => 0;
 use Data::Dumper;
 
 our $VERSION = '0.2';
@@ -43,12 +43,34 @@ our @multiword_tokens = (
 
 our @list_tokens = (
     qw/
-        as
-        in
-        is
-        not
-        null
-    /
+      as
+      in
+      is
+      not
+      null
+      /
+);
+
+# Extracted 2020-04-03 from https://www.sqlite.org/lang_keywords.html
+our @SQLITE_TOKENS = (
+    qw/
+      ABORT ACTION ADD AFTER ALL ALTER ALWAYS ANALYZE AND AS ASC ATTACH
+      AUTOINCREMENT BEFORE BEGIN BETWEEN BY CASCADE CASE CAST CHECK
+      COLLATE COLUMN COMMIT CONFLICT CONSTRAINT CREATE CROSS CURRENT
+      CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP DATABASE DEFAULT
+      DEFERRABLE DEFERRED DELETE DESC DETACH DISTINCT DO DROP EACH ELSE
+      END ESCAPE EXCEPT EXCLUDE EXCLUSIVE EXISTS EXPLAIN FAIL FILTER
+      FIRST FOLLOWING FOR FOREIGN FROM FULL GENERATED GLOB GROUP GROUPS
+      HAVING IF IGNORE IMMEDIATE IN INDEX INDEXED INITIALLY INNER INSERT
+      INSTEAD INTERSECT INTO IS ISNULL JOIN KEY LAST LEFT LIKE LIMIT
+      MATCH NATURAL NO NOT NOTHING NOTNULL NULL NULLS OF OFFSET ON OR
+      ORDER OTHERS OUTER OVER PARTITION PLAN PRAGMA PRECEDING PRIMARY
+      QUERY RAISE RANGE RECURSIVE REFERENCES REGEXP REINDEX RELEASE
+      RENAME REPLACE RESTRICT RIGHT ROLLBACK ROW ROWS SAVEPOINT SELECT
+      SET TABLE TEMP TEMPORARY THEN TIES TO TRANSACTION TRIGGER UNBOUNDED
+      UNION UNIQUE UPDATE USING VACUUM VALUES VIEW VIRTUAL WHEN WHERE
+      WINDOW WITH WITHOUT
+      /
 );
 
 sub _is_multiword_token {
@@ -65,7 +87,7 @@ sub _is_multiword_token {
 sub _is_list_token {
     my ( $self, $token ) = @_;
 
-    my $lc  = lc $token;
+    my $lc = lc $token;
 
     return scalar( grep { $lc eq $_ } @list_tokens );
 }
@@ -75,17 +97,33 @@ sub _is_list_token {
 # needs to break them up when it comes to them, but this allows our
 # tokenization logic to be extra simple.
 
+sub _is_level {
+    die '_is_level usage' unless @_ == 2;
+    my $levels = shift;
+    my $test   = shift;
+    $levels->[ $#{$levels} ] eq $test;
+}
+
 sub _get_tokens {
     my ( $self, $sql ) = @_;
 
     # each word is its own token, except if its in a string or comment
     my @tokens            = ();
+    my @levels            = ();
     my $current_token     = '';
     my $is_in_string      = 0;
     my $is_in_comment     = 0;
-    my $is_in_longcomment     = 0;
+    my $is_in_longcomment = 0;
     my $parenthesis_depth = 0;
     my $escaped           = 0;
+
+    #    sub x {
+    #        my $levels = \@levels;
+    #    die '_is_level usage' unless @_ == 2;
+##    my $levels = shift;
+    #    my $test = shift;
+    #    $levels->[$#{$levels}] eq $test;
+    #    }
 
     for my $c ( split( //, $sql ) ) {
 
@@ -101,6 +139,7 @@ sub _get_tokens {
             $current_token .= $c;
             if ( $c eq '(' ) {
                 $parenthesis_depth++;
+                push @levels, 'escaped';
             }
             elsif ( $c eq ')' ) {
                 $parenthesis_depth--;
@@ -129,7 +168,7 @@ sub _get_tokens {
         elsif ($is_in_longcomment) {
             if ( $c eq '/' and $current_token =~ m/\*$/ ) {
                 $is_in_longcomment = 0;
-                push( @tokens, $current_token .$c);
+                push( @tokens, $current_token . $c );
                 $current_token = '';
             }
             else {
@@ -140,12 +179,13 @@ sub _get_tokens {
             if ( $self->_is_multiword_token( \@tokens, $current_token ) ) {
                 $tokens[-1] .= " $current_token";
             }
-#            elsif (lc($current_token) eq 'begin') {
-#                $parenthesis_depth++;
-#            }
-#            elsif (lc($current_token) eq 'end') {
-#                $parenthesis_depth--;
-#            }
+
+            #            elsif (lc($current_token) eq 'begin') {
+            #                $parenthesis_depth++;
+            #            }
+            #            elsif (lc($current_token) eq 'end') {
+            #                $parenthesis_depth--;
+            #            }
             elsif ( $current_token ne '' ) {
                 push( @tokens, $current_token );
             }
@@ -394,14 +434,14 @@ sub _reforge_list {
 sub process_select          { list_formatter(@_) }
 sub process_except          { list_formatter(@_) }
 sub process_select_distinct { list_formatter(@_) }
-sub process_create_table { list_formatter(@_) }
-sub process_create_view { list_formatter(@_) }
-sub process_case_when { list_formatter(@_) }
-sub process_when { list_formatter(@_) }
-sub process_then { list_formatter(@_) }
-sub process_else { list_formatter(@_) }
-sub process_end { list_formatter(@_) }
-sub process_end_as { list_formatter(@_) }
+sub process_create_table    { list_formatter(@_) }
+sub process_create_view     { list_formatter(@_) }
+sub process_case_when       { list_formatter(@_) }
+sub process_when            { list_formatter(@_) }
+sub process_then            { list_formatter(@_) }
+sub process_else            { list_formatter(@_) }
+sub process_end             { list_formatter(@_) }
+sub process_end_as          { list_formatter(@_) }
 sub process_from            { list_formatter(@_) }
 sub process_delete_from     { list_formatter(@_) }
 sub process_group_by        { list_formatter(@_) }
@@ -414,8 +454,8 @@ sub process_right_join      { join_formatter(@_) }
 sub process_inner_join      { list_formatter(@_) }
 sub process_outer_join      { join_formatter(@_) }
 sub process_full_join       { join_formatter(@_) }
-sub process_on       { list_formatter(@_) }
-sub process_with       { join_formatter(@_) }
+sub process_on              { list_formatter(@_) }
+sub process_with            { join_formatter(@_) }
 sub process_where           { where_formatter(@_) }
 sub process_having          { where_formatter(@_) }
 sub process_update          { update_formatter(@_) }
@@ -657,19 +697,19 @@ sub tidy {
 ### DO NOT EDIT BELOW! (generated by Class::Inline v0.0.1)
 #<<<
   require Carp;our@ATTRS_UNEX=(undef);sub new {my$class=shift;my$self={@_ ? @_
-  > 1 ? @_ : %{$_[0]}: ()};if (@ATTRS_UNEX){map {Carp::carp(
-  "SQL::Tree argument '$_' unexpected");delete$self->{$_ }}sort grep {not
-  exists$INLINE->{$_ }}keys %$self}else {@ATTRS_UNEX=map {delete$self->{$_ };
-  $_}grep {not exists$INLINE->{$_ }}keys %$self}bless$self,ref$class || $class
-  }sub double_escape {Carp::croak (
-  "attribute (SQL::Tree::double_escape) is read-only")if @_ > 1;$_[0]{
-  'double_escape'}//= $INLINE->{'double_escape'}->{'default'}}sub indent {
-  Carp::croak ("attribute (SQL::Tree::indent) is read-only")if @_ > 1;$_[0]{
-  'indent'}//= $INLINE->{'indent'}->{'default'}}sub preserve_leading {
-  Carp::croak ("attribute (SQL::Tree::preserve_leading) is read-only")if @_ >
-  1;$_[0]{'preserve_leading'}//= $INLINE->{'preserve_leading'}->{'default'}}
-  sub uppercase {Carp::croak ("attribute (SQL::Tree::uppercase) is read-only")
-  if @_ > 1;$_[0]{'uppercase'}//= $INLINE->{'uppercase'}->{'default'}}
+  > 1 ? @_ : %{$_[0]}: ()};if (@ATTRS_UNEX){map {local$Carp::CarpLevel=
+  $Carp::CarpLevel + 1;Carp::carp("SQL::Tree attribute '$_' unexpected");
+  delete$self->{$_ }}sort grep {not exists$INLINE->{$_ }}keys %$self}else {
+  @ATTRS_UNEX=map {delete$self->{$_ };$_}grep {not exists$INLINE->{$_ }}keys %
+  $self}bless$self,ref$class || $class}sub __ro {my (undef,undef,undef,$sub)=
+  caller(1);local$Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::croak(
+  "attribute $sub is read-only (value: '" .($_[1]// 'undef')."')")}sub
+  double_escape {$_[0]->__ro($_[1])if @_ > 1;$_[0]{'double_escape'}//= $INLINE
+  ->{'double_escape'}->{'default'}}sub indent {$_[0]->__ro($_[1])if @_ > 1;$_[
+  0]{'indent'}//= $INLINE->{'indent'}->{'default'}}sub preserve_leading {$_[0]
+  ->__ro($_[1])if @_ > 1;$_[0]{'preserve_leading'}//= $INLINE->{
+  'preserve_leading'}->{'default'}}sub uppercase {$_[0]->__ro($_[1])if @_ > 1;
+  $_[0]{'uppercase'}//= $INLINE->{'uppercase'}->{'default'}}
 #>>>
 ### DO NOT EDIT ABOVE! (generated by Class::Inline v0.0.1)
 
@@ -737,3 +777,4 @@ features by Mark Lawrence <nomad@null.net>.
 Copyright 2011 Ryan Kosai <github@ryankosai.com>
 
 Copyright 2020 Mark Lawrence <nomad@null.net>
+
