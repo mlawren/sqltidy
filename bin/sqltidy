@@ -1,9 +1,9 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use OptArgs2;
 use FindBin '$Bin';
 use lib "$Bin/../lib";
+use OptArgs2;
 
 our $VERSION = '0.2';
 
@@ -12,7 +12,7 @@ cmd 'App::sqltidy' => (
     optargs => sub {
         arg file => (
             isa     => 'Str',
-            comment => 'file containing SQL to tidy',
+            comment => 'file to tidy (or pipe SQL straight in)',
         );
 
         opt help => (
@@ -22,27 +22,48 @@ cmd 'App::sqltidy' => (
             comment => 'print full usage and exit',
         );
 
-        opt double_escape => (
+        opt debug => (
             isa     => 'Flag',
-            comment => 'x',
+            alias   => 'd',
+            comment => 'show parse tree in output',
         );
+
+        #        opt double_escape => (
+        #            isa     => 'Flag',
+        #            comment => 'x',
+        #        );
 
         opt indent => (
-            isa     => 'Str',
-            default => '    ',
-            comment => 'string to indent with',
+            isa          => 'Int',
+            isa_name     => 'COUNT',
+            alias        => 'i',
+            default      => 4,
+            comment      => 'number of spaces to indent',
+            show_default => 1,
         );
 
-        opt no_preserve_leading => (
+        opt inplace => (
             isa     => 'Flag',
-            alias   => 'P',
-            comment => 'x',
+            alias   => 'p',
+            comment => 'overwrite FILE in place',
         );
 
-        opt editor_mode => (
+        opt backup => (
             isa     => 'Bool',
-            comment => 'x',
+            default => 1,
+            comment => 'do not backup when --inplace is used',
         );
+
+        #        opt no_preserve_leading => (
+        #            isa     => 'Flag',
+        #            alias   => 'P',
+        #            comment => 'x',
+        #        );
+        #
+        #        opt editor_mode => (
+        #            isa     => 'Bool',
+        #            comment => 'x',
+        #        );
 
         opt sql => (
             isa     => 'Str',
@@ -55,34 +76,38 @@ cmd 'App::sqltidy' => (
 
 my ( undef, $opts ) = class_optargs('App::sqltidy');
 
-if ( exists $opts->{file} ) {
+if ( exists $opts->{file} ) {    # read from STDIN
+    die "file not found: $opts->{file}\n" unless -f $opts->{file};
     require Path::Tiny;
     $opts->{sql} = Path::Tiny::path( $opts->{file} )->slurp_utf8;
 }
-elsif ( not exists $opts->{sql} ) {
-
-    # read from STDIN
+elsif ( not -t STDIN ) {
     local $/ = undef;
     $opts->{sql} = <>;
 }
+else {
+    die OptArgs2::usage('App::sqltidy');
+}
 
-require SQL::Tree;
-my $tree = SQL::Tree->new(
-    double_escape    => $opts->{double_escape},
-    indent           => $opts->{indent},
-    preserve_leading => !$opts->{no_preserve_leading},
-    uppercase        => $opts->{uppercase},
-);
-
-my $output = $tree->tidy( $opts->{sql} );
+require SQL::Tidy;
+my $sql    = SQL::Tidy->new( debug => $opts->{debug} );
+my $output = $sql->parse( $opts->{sql} );
 
 if ( $opts->{file} ) {
-    Path::Tiny::path( $opts->{file} . '.tdy' )
-      ->spew_utf8( $tree->tidy( $opts->{sql} ) );
+    if ( $opts->{inplace} ) {
+
+        # TODO
+        Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
+    }
+    else {
+        Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
+    }
 }
 else {
-    print $tree->tidy( $opts->{sql} );
+    print $output;
 }
+
+1;
 
 __END__
 
@@ -92,12 +117,12 @@ sqltidy - format and indent SQL text
 
 =head1 SYNOPSIS
 
-    sqltidy [FILE] [OPTIONS...]
+    sqltidy FILE [OPTIONS...]
 
 =head1 DESCRIPTION
 
-The B<sqltidy> tool reformat SQL in an aesthetically pleasing way.  It can
-be run stand-alone (passing a file as an argument) or can be run
+The B<sqltidy> tool reformat SQL in an aesthetically pleasing way.  It
+can be run stand-alone (passing a file as an argument) or can be run
 in-place on code in your text editor.
 
 If C<FILE> is passed as an argument to the script, the script will
@@ -106,11 +131,13 @@ extension .tdy appended to the original filename.
 
 If a filename is not passed, then the script will read from STDIN and
 output the tidied SQL to STDOUT.  This makes it suitable for in-place
-edits in your favorite text editor.  In this case, the C<--double-escape>
+edits in your favorite text editor.
+
+=for comment
+In this case, the C<--double-escape>
 and C<--preserve-indent> options are enabled by default unless
 an explicit C<--no-editor-mode> is used.
 
-This is the same behavior as perltidy.
 
 =head1 OPTIONS
 
@@ -119,6 +146,8 @@ This is the same behavior as perltidy.
 =item --help
 
 Print a help message and exit.
+
+=begin comment
 
 =item --double-escape
 
@@ -142,6 +171,8 @@ Enabled by default when invoked without a file (using STDIN).
 Don't invoke editor mode by default when calling sqltidy without a
 file.
 
+=end comment
+
 =back
 
 =head1 EXIT VALUE
@@ -154,8 +185,7 @@ B<sqltidy> is a wrapper around the Perl L<SQL::Tree> package.
 
 =head1 AUTHOR
 
-Mark Lawrence E<lt>nomad@null.netE<gt> wrote this version of sqltidy
-based on the original script by Ryan Kosai <github@ryankosai.com>.
+Mark Lawrence E<lt>nomad@null.netE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
@@ -165,3 +195,4 @@ This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
 Free Software Foundation; either version 3 of the License, or (at your
 option) any later version.
+
