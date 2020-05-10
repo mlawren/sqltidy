@@ -162,14 +162,19 @@ sub parse {
             $indent    = length($c_indent) ? $c_indent : $indent;
             $newindent = $indent . $extra;                         # recalculate
             my @list = @{ $n->tokens };
+            my $i    = 0;
             while ( my $t = shift @list ) {
                 $ref = ref($t);
+                $i++;
                 my $nref = ref $list[0] // '';
 
                 if ( ref($t) eq 'Keywords' ) {
                     if ( length $c_indent ) {
                         push @new, [$t];
                         $c_indent = '';
+                    }
+                    elsif ( $i == 1 ) {
+                        push @new, [$indent], [$t];
                     }
                     else {
                         push @new, $NL, [$indent], [$t];
