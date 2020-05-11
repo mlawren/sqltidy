@@ -93,18 +93,14 @@ require SQL::Tidy;
 my $sql    = SQL::Tidy->new( debug => $opts->{debug} );
 my $output = $sql->parse( $opts->{sql} );
 
-if ( $opts->{file} ) {
-    if ( $opts->{inplace} ) {
-
-        # TODO
-        Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
-    }
-    else {
-        #    Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
-        print $output;
-    }
+# TODO
+if ( $opts->{inplace} ) {
+    Path::Tiny::path( $opts->{file} . '.tdy' )->spew_utf8($output);
 }
 else {
+    require SQL::Tidy::Pager;
+    my $pager = SQL::Tidy::Pager->new;
+    $pager->open;
     print $output;
 }
 
