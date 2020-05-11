@@ -125,16 +125,20 @@ sub parse {
     die "coult not parse input as SQLite SQL\n"
       unless my @list = $messy =~ m/$re/g;
 
+    my $clean = '';
     if ( $self->debug ) {
         my $depth = '';
         my @tok   = map { [ $depth, $_ ] } @{ $self->tokens };
         while ( my $t = shift @tok ) {
             if ( ref( $t->[1] ) and $t->[1]->can('tokens') ) {
                 if ( $t->[1]->can('val') ) {
-                    print $t->[0] . ref( $t->[1] ) . ': ' . $t->[1]->val . "\n";
+                    $clean .= '--| '
+                      . $t->[0]
+                      . ref( $t->[1] ) . ': '
+                      . $t->[1]->val . "\n";
                 }
                 else {
-                    print $t->[0] . ref( $t->[1] ) . ': ' . "\n";
+                    $clean .= '--| ' . $t->[0] . ref( $t->[1] ) . ': ' . "\n";
                 }
                 unshift @tok,
                   map { [ $t->[0] . '  ', $_ ] } @{ $t->[1]->tokens };
@@ -145,7 +149,6 @@ sub parse {
         }
     }
 
-    my $clean = '';
     my $extra = '    ';
     my $NL    = ["\n"];
     my $WS    = [' '];
