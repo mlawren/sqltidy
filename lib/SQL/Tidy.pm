@@ -5,6 +5,7 @@ use warnings;
 use Carp ();
 use Scalar::Util 'refaddr';
 use Types::Standard (qw/Maybe Object/);
+our $VERSION = '0.0.1';
 
 our $INLINE = {
     CLASS => { inc => 1, },
@@ -12,10 +13,9 @@ our $INLINE = {
         is      => 'rw',
         default => sub { $_[0] }
     },
-    debug        => undef,
-    latest       => { isa => Maybe [Object], is => 'rw', weaken => 1, },
-    start_indent => { is => 'rw', default => '' },
-    tokens       => { is => 'rw', default => sub { [] }, },
+    latest       => { isa => Maybe [Object], is      => 'rw', weaken => 1, },
+    start_indent => { is  => 'rw',           default => '' },
+    tokens       => { is  => 'rw',           default => sub { [] }, },
 };
 
 my @OPERATORS = ( qw{
@@ -121,41 +121,51 @@ sub _reset {
     $self->tokens( [] );
 }
 
+sub tidy {
+    my $self = shift;
+    my $sql  = shift;
+    $self->parse($sql);
+    $self->tree2sql;
+}
+
 sub parse {
     my $self  = shift;
     my $messy = shift;
-
     $self->_reset;
-
     local $__doc = $self;
 
     die "coult not parse input as SQLite SQL\n"
       unless my @list = $messy =~ m/$re/g;
+}
 
+sub tree2ast {
+    my $self  = shift;
     my $clean = '';
-    if ( $self->debug ) {
-        my $depth = '';
-        my @tok   = map { [ $depth, $_ ] } @{ $self->tokens };
-        while ( my $t = shift @tok ) {
-            if ( ref( $t->[1] ) and $t->[1]->can('tokens') ) {
-                if ( $t->[1]->can('val') ) {
-                    $clean .= '--| '
-                      . $t->[0]
-                      . ref( $t->[1] ) . ': '
-                      . $t->[1]->val . "\n";
-                }
-                else {
-                    $clean .= '--| ' . $t->[0] . ref( $t->[1] ) . ': ' . "\n";
-                }
-                unshift @tok,
-                  map { [ $t->[0] . '  ', $_ ] } @{ $t->[1]->tokens };
+    my $depth = '';
+    my @tok   = map { [ $depth, $_ ] } @{ $self->tokens };
+    while ( my $t = shift @tok ) {
+        if ( ref( $t->[1] ) and $t->[1]->can('tokens') ) {
+            if ( $t->[1]->can('val') ) {
+                $clean .= '--| '
+                  . $t->[0]
+                  . ref( $t->[1] ) . ': '
+                  . $t->[1]->val . "\n";
             }
             else {
-                #                warn $t->[0] . $t->[1] . "\n";
+                $clean .= '--| ' . $t->[0] . ref( $t->[1] ) . ': ' . "\n";
             }
+            unshift @tok, map { [ $t->[0] . '  ', $_ ] } @{ $t->[1]->tokens };
+        }
+        else {
+            #                warn $t->[0] . $t->[1] . "\n";
         }
     }
+    $clean;
+}
 
+sub tree2sql {
+    my $self  = shift;
+    my $clean = '';
     my $extra = '    ';
     my $NL    = ["\n"];
     my $WS    = [' '];
@@ -183,9 +193,10 @@ sub parse {
                         push @new, [$t];
                         $c_indent = '';
                     }
-                    elsif ( $i == 1 ) {
-                        push @new, [$indent], [$t];
-                    }
+
+                    #                    elsif ( $i == 1 ) {
+                    #                        push @new, [$indent], [$t];
+                    #                    }
                     else {
                         push @new, $NL, [$indent], [$t];
                     }
