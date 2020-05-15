@@ -12,7 +12,7 @@ cmd 'App::sqltidy' => (
     optargs => sub {
         arg file => (
             isa     => 'Str',
-            comment => 'file to tidy (or pipe SQL straight in)',
+            comment => 'file to tidy ("-" to force stdin)',
         );
 
         opt help => (
@@ -76,10 +76,16 @@ cmd 'App::sqltidy' => (
 
 my ( undef, $opts ) = class_optargs('App::sqltidy');
 
-if ( exists $opts->{file} ) {    # read from STDIN
-    die "file not found: $opts->{file}\n" unless -f $opts->{file};
-    require Path::Tiny;
-    $opts->{sql} = Path::Tiny::path( $opts->{file} )->slurp_utf8;
+if ( exists $opts->{file} ) {
+    if ( $opts->{file} eq '-' ) {
+        local $/ = undef;
+        $opts->{sql} = <>;
+    }
+    else {
+        die "file not found: $opts->{file}\n" unless -f $opts->{file};
+        require Path::Tiny;
+        $opts->{sql} = Path::Tiny::path( $opts->{file} )->slurp_utf8;
+    }
 }
 elsif ( not -t STDIN ) {
     local $/ = undef;
@@ -90,8 +96,9 @@ else {
 }
 
 require SQL::Tidy;
-my $sql    = SQL::Tidy->new( debug => $opts->{debug} );
-my $output = $sql->parse( $opts->{sql} );
+my $sql = SQL::Tidy->new();
+$sql->parse( $opts->{sql} );
+my $output = ( $opts->{debug} ? $sql->tree2ast : '' ) . $sql->tree2sql;
 
 # TODO
 if ( $opts->{inplace} ) {
