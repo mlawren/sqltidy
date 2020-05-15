@@ -22,11 +22,16 @@ my @OPERATORS = ( qw{
     || << >> <= >= == != <> * / % + - & | < > =
 } );
 
+my @BOOLOPS = ( qw{
+    AND OR
+} );
+
+# ORDER is in here extra because of Windows functions
 my @STMT = (
     qw/
       PARTITION SAVEPOINT COMPOUND FACTORED ROLLBACK ANALYZE EXPLAIN
       REINDEX RELEASE ATTACH COMMIT CREATE DELETE DETACH INSERT PRAGMA
-      SELECT SIMPLE UPDATE VACUUM ALTER BEGIN DROP WITH
+      SELECT SIMPLE UPDATE VACUUM VALUES ALTER BEGIN ORDER DROP WITH
       /
 );
 
@@ -34,8 +39,8 @@ my @INLINE = (
     qw/
       GROUP_CONCAT CONSTRAINT REFERENCES COALESCE DATETIME DEFAULT
       FOREIGN INTEGER NOTNULL PRIMARY VARCHAR COLUMN ISNULL REGEXP UNIQUE
-      CHECK INDEX MATCH BLOB CHAR DESC GLOB LIKE NULL OVER TEXT AND ASC
-      INT KEY NOT AS IN IS OR
+      CHECK INDEX MATCH BLOB CHAR DESC GLOB LIKE NULL OVER TEXT ASC
+      INT KEY NOT AS IN IS
       /
 );
 
@@ -48,16 +53,17 @@ my @KEYWORDS = (
       COLLATE CURRENT EXCLUDE INDEXED INSTEAD NATURAL NOTHING REPLACE
       TRIGGER VIRTUAL WITHOUT ACTION ALWAYS BEFORE ESCAPE EXCEPT EXISTS
       FILTER GROUPS HAVING IGNORE OFFSET OTHERS RENAME VALUES WINDOW
-      ABORT AFTER CROSS FIRST GROUP INNER LIMIT NULLS ORDER OUTER QUERY
-      RAISE RANGE RIGHT TABLE UNION USING WHERE CASE CAST EACH ELSE FAIL
-      FROM FULL INTO JOIN LAST LEFT PLAN ROWS TEMP THEN TIES VIEW WHEN
-      ADD ALL END FOR ROW SET BY DO IF NO OF ON TO
+      ABORT AFTER CROSS FIRST GROUP INNER LIMIT NULLS OUTER QUERY RAISE
+      RANGE RIGHT TABLE UNION USING WHERE CASE CAST EACH ELSE FAIL FROM
+      FULL INTO JOIN LAST LEFT PLAN ROWS TEMP THEN TIES VIEW WHEN ADD
+      ALL END FOR ROW SET BY DO IF NO OF ON TO
       /
 );
 
 my $stmt_re      = join '|', @STMT;
 my $keywords_re  = join '|', @KEYWORDS;
 my $inline_re    = join '|', @INLINE;
+my $boolop_re    = join '|', @BOOLOPS;
 my $operators_re = join '|', map { s!([|/*+])!\\$1!gr } @OPERATORS;
 
 my $scomment_re = qr/ \n? \ * -- [^\n]* /sx;
@@ -81,6 +87,7 @@ my $re = qr!
     | \b(END)\b          (?{ $__doc->end_case(); })
     | \b($keywords_re)\b (?{ $__doc->add_keyword($^N); })
     | \b($inline_re)\b   (?{ $__doc->add_inline($^N); })
+    | \b($boolop_re)\b   (?{ $__doc->add_boolop($^N); })
     | ($word_re\s*\()    (?{ $__doc->start_function( $^N, ')' ); })
     | \(                 (?{ $__doc->start_block( '(', ')' ); })
     | ($scomment_re)     (?{ $__doc->add_comment($^N); })
@@ -274,16 +281,16 @@ sub parse {
                 elsif ( $i == 1 ) {
                     push @new, [ $t, $indent ];
                 }
+                elsif ( ref($t) eq 'BoolOp' ) {
+                    push @new, $NL, [$indent], [ $t, $indent ];
+                }
                 else {
                     push @new, $WS, [ $t, $indent ];
                 }
                 $i++;
             }
         }
-        elsif ( $ref eq 'Keywords' ) {
-            $clean .= uc "@{$n->tokens}";
-        }
-        elsif ( $ref eq 'Inline' ) {
+        elsif ( $ref eq 'Keywords' or $ref eq 'Inline' or $ref eq 'BoolOp' ) {
             $clean .= uc "@{$n->tokens}";
         }
         elsif ( $ref eq 'Tokens' ) {
@@ -537,6 +544,12 @@ sub add_ws {
     $self->start_indent($val);
 }
 
+sub add_boolop {
+    my $self = shift;
+    my $val  = shift;
+    $self->add( BoolOp->new( val => $val, parent => $self->curr, ) );
+}
+
 sub add_inline {
     my $self = shift;
     my $val  = shift;
@@ -696,6 +709,11 @@ use warnings;
 use parent 'Tokens';
 
 package Inline;
+use strict;
+use warnings;
+use parent 'Tokens';
+
+package BoolOp;
 use strict;
 use warnings;
 use parent 'Tokens';
