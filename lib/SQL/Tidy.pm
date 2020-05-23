@@ -33,37 +33,49 @@ my @BOOLOPS = ( qw{
     AND OR
 } );
 
-# ORDER is in here extra because of Windows functions
-my @STMT = (
+# ORDER RANGE PARTITION EXLUDE ROWS GROUPS here because of Windows functions
+#my @STMT = (
+my @STMT = sort { length $b <=> length $a } (
     qw/
       PARTITION SAVEPOINT COMPOUND FACTORED ROLLBACK ANALYZE EXPLAIN
       REINDEX RELEASE ATTACH COMMIT CREATE DELETE DETACH INSERT PRAGMA
       SELECT SIMPLE UPDATE VACUUM VALUES ALTER BEGIN ORDER DROP WITH
+      RANGE ROWS GROUPS EXCLUDE WHEN
       /
 );
 
-my @INLINE = (
+# should be seen as function not keyword:
+# GROUP_CONCAT COALESCE REPLACE. The problem is with SELECT COALESCE(1,2)
+
+my @INLINE = sort { length $b <=> length $a } (
     qw/
-      GROUP_CONCAT CONSTRAINT REFERENCES COALESCE DATETIME DEFAULT
+      CONSTRAINT REFERENCES DATETIME DEFAULT
       FOREIGN INTEGER NOTNULL PRIMARY VARCHAR COLUMN ISNULL REGEXP UNIQUE
       CHECK INDEX MATCH BLOB CHAR DESC GLOB LIKE NULL OVER TEXT ASC
       INT KEY NOT AS IN IS
-      /
-);
 
-my @KEYWORDS = (
-    qw/
+      COLLATE
+      CASCADE UNBOUNDED
+
       CURRENT_TIMESTAMP AUTOINCREMENT CURRENT_DATE CURRENT_TIME
       TRANSACTION DEFERRABLE EXCLUSIVE FOLLOWING GENERATED IMMEDIATE
-      INITIALLY INTERSECT PRECEDING RECURSIVE TEMPORARY UNBOUNDED
-      CONFLICT DATABASE DEFERRED DISTINCT RESTRICT BETWEEN CASCADE
-      COLLATE CURRENT EXCLUDE INDEXED INSTEAD NATURAL NOTHING REPLACE
+      INITIALLY INTERSECT PRECEDING RECURSIVE TEMPORARY
+      CONFLICT DATABASE DEFERRED DISTINCT RESTRICT BETWEEN
+      CURRENT INDEXED NATURAL NOTHING
       TRIGGER VIRTUAL WITHOUT ACTION ALWAYS BEFORE ESCAPE EXCEPT EXISTS
-      FILTER GROUPS HAVING IGNORE OFFSET OTHERS RENAME VALUES WINDOW
-      ABORT AFTER CROSS FIRST GROUP INNER LIMIT NULLS OUTER QUERY RAISE
-      RANGE RIGHT TABLE UNION USING WHERE CASE CAST EACH ELSE FAIL FROM
-      FULL INTO JOIN LAST LEFT PLAN ROWS TEMP THEN TIES VIEW WHEN ADD
-      ALL END FOR ROW SET BY DO IF NO OF ON TO
+      FILTER IGNORE OTHERS RENAME VALUES WINDOW
+      ABORT AFTER CROSS FIRST NULLS OUTER QUERY RAISE
+      TABLE USING CAST EACH FAIL
+      FULL INTO LAST PLAN TEMP TIES VIEW
+      ALL END ROW BY DO IF NO OF TO
+
+      /, 'on\\ delete', 'on\\ update'
+);
+
+my @KEYWORDS = sort { length $b <=> length $a } (
+    qw/
+      FROM INNER LEFT RIGHT JOIN WHERE GROUP HAVING UNION
+      THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD
       /
 );
 
@@ -73,13 +85,14 @@ my $inline_re    = join '|', @INLINE;
 my $boolop_re    = join '|', @BOOLOPS;
 my $operators_re = join '|', map { s!([|/*+])!\\$1!gr } @OPERATORS;
 
-my $scomment_re = qr/ \n? \ * -- [^\n]* /sx;
-my $comment_re  = qr/ \/\* .*? (?: \*\/ | $ ) /sx;
-my $shell_re    = qr/ ^\. [^\n]* \n? /mx;
+my $ws_re       = qr/ \b | [$ \ \n] /sx;
+my $scomment_re = qr/ -- \N* \n? /sx;
+my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
+my $shell_re    = qr/ ^\. \N* \n? /mx;
 my $passthru_re = qr/ $comment_re | $shell_re /x;
 my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
                      | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
-my $word_re       = qr/ [a-zA-Z] [_a-zA-Z0-9]* /x;
+my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
 my $identifier_re = qr/ (?: " [^"]* " | $word_re ) /x;
 my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
 my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
@@ -88,21 +101,22 @@ my $expr_re = qr/ $column_re | $string_re | $operators_re | $num_re | \?  /x;
 our $__doc;
 my $re = qr!
   (?:
-      \b($stmt_re)\b     (?{ $__doc->start_stmt($^N); })
+     BEGIN$ws_re          (?{ $__doc->start_begin(); })
+    | ($stmt_re)$ws_re    (?{ $__doc->start_stmt($^N); })
     | (\))               (?{ $__doc->end_block( $^N ); })
-    | \b(CASE)\b         (?{ $__doc->start_case(); })
-    | \b(END)\b          (?{ $__doc->end_case(); })
-    | \b($keywords_re)\b (?{ $__doc->add_keyword($^N); })
-    | \b($inline_re)\b   (?{ $__doc->add_inline($^N); })
-    | \b($boolop_re)\b   (?{ $__doc->add_boolop($^N); })
-    | ($word_re\s*\()    (?{ $__doc->start_function( $^N, ')' ); })
-    | \(                 (?{ $__doc->start_block( '(', ')' ); })
+    | (CASE)$ws_re         (?{ $__doc->start_case(); })
+    | (END)$ws_re         (?{ $__doc->end_block( $^N ); })
+    | ($inline_re)$ws_re   (?{ $__doc->add_inline($^N); })
+    | ($keywords_re)$ws_re (?{ $__doc->add_keyword($^N); })
+    | ($boolop_re)$ws_re   (?{ $__doc->add_boolop($^N); })
+    | ($word_re)\s*\(    (?{ $__doc->start_function( $^N.'(', ')' ); })
+    | \(                 (?{ $__doc->start_block( qw/ (     )   / ); })
     | ($scomment_re)     (?{ $__doc->add_comment($^N); })
-    | ($passthru_re)\n?  (?{ $__doc->add_passthru($^N); })
+    | ($passthru_re)     (?{ $__doc->add_passthru($^N); })
     | ($expr_re)         (?{ $__doc->add_expr($^N); })
     | ,                  (?{ $__doc->make_list; })
-    | \n                 (?{ $__doc->add_newline; })
-    | (\s+)              (?{ $__doc->add_ws($^N); })
+    | \n+                (?{ $__doc->add_newline; })
+    | (\ +)              (?{ $__doc->add_ws($^N); })
     | ;                  (?{ $__doc->end_stmt(';'); })
     | (.)                (?{ $__doc->add_rest($^N); })
   )
@@ -179,6 +193,7 @@ sub tree2sql {
     my @tok   = map { [$_] } @{ $self->tokens };
 
     my $prev = '';
+    my $tok  = 0;
     while ( my $t = shift @tok ) {
         my ( $n, $ref, $indent ) = ( $t->[0], ref( $t->[0] ), $t->[1] // '' );
         my $newindent = $indent . $extra;
@@ -205,7 +220,7 @@ sub tree2sql {
                     #                        push @new, [$indent], [$t];
                     #                    }
                     else {
-                        push @new, $NL, [$indent], [$t];
+                        push @new, ( $i > 1 ? $NL : () ), [$indent], [$t];
                     }
                 }
                 elsif ( $ref eq 'List' ) {
@@ -218,7 +233,8 @@ sub tree2sql {
                     push @new, $WS, [ $t, $indent ];
                 }
                 elsif ( $ref eq 'Block' ) {
-                    push @new, $WS, [ $t, $indent . $extra ];
+                    push @new, ( length $t->val ? $WS : () ),
+                      [ $t, $indent . $extra ];
                 }
                 elsif ( $ref eq 'Tokens' ) {
                     push @new, [ $t, $newindent ];
@@ -229,8 +245,15 @@ sub tree2sql {
                 elsif ( $ref eq 'Comment' ) {
                     push @new, $WS, [$t];
                 }
+                elsif ( $ref eq 'BoolOp' ) {    # Window Function
+                    push @new, $NL, [$indent], [ $t, $indent ];
+                }
+                elsif ( $ref eq 'EOS' ) {       # End of Statement
+                    push @new, [$t];
+                }
                 else {
                     warn 'unhandled ' . $ref;
+                    push @new, [ ' /* UNHAND ' . $ref . ' */ ' ];
                 }
                 $prev = $ref;
             }
@@ -263,28 +286,38 @@ sub tree2sql {
             #            }
         }
         elsif ( $ref eq 'Block' or $ref eq 'Function' ) {
-            my @list = @{ $n->tokens };
-            my $ref  = ref $list[0];
-            if ( not @list ) {
-                push @new, [ $n->val . $n->postval ];
-            }
-            elsif ( 'List' eq ( my $ref = ref $list[0] ) ) {
-                push @new, [ $n->val ],
-                  ( map { [ $_, $indent ] } @list ),
-                  $NL, [ '  ' . $indent =~ s/$extra//r ], [ $n->postval ];
-            }
-            elsif ( $ref eq 'Statement' ) {
-                push @new, [ $n->val ],
-                  ( map { [ $_, $indent ] } @list ),
-                  $NL, [ '  ' . $indent =~ s/$extra//r ], [ $n->postval ];
-            }
-            else {    # Expr? Keywords (for things like Window Functions)
-                push @new, [ $n->val ], [ ( shift @list ), $indent ];
-                foreach my $t (@list) {
+            push @new, [ $n->val ];
+            my @list    = @{ $n->tokens };
+            my $i       = 0;
+            my $complex = 0;
+            foreach my $t (@list) {
+                my $ref = ref($t);
+                if ( $ref eq 'Expr' ) {
+                    push @new, @list > 1 ? $WS : (), [ $t, $indent ];
+                }
+                elsif ( $ref eq 'List' ) {
+                    push @new, [ $t, $indent ];
+                    $complex++;
+                }
+                elsif ( $ref eq 'Keywords' ) {
+                    push @new, [ $t, $indent ];
+                }
+                elsif ( $ref eq 'Comment' ) {
+                    push @new, [ $t, $indent ];
+                }
+                elsif ( $ref eq 'Statement' ) {
+                    $complex++;
+                    push @new, $NL, [ $t, $indent ];
+                }
+                else {
+                    warn 'unhandled Block/Function->' . $ref;
                     push @new, $WS, [ $t, $indent ];
                 }
-                push @new, [ $n->postval ];
+                $i++;
             }
+            push @new,
+              ( $complex ? ( $NL, [ '  ' . $indent =~ s/$extra//r ] ) : () ),
+              [ $n->end ];
         }
         elsif ( $ref eq 'Expr' ) {
             my @list = @{ $n->tokens };
@@ -316,6 +349,9 @@ sub tree2sql {
         }
         elsif ( $ref eq 'Comment' ) {
             $clean .= $n->val;
+        }
+        elsif ( $ref eq 'EOS' ) {
+            $clean .= $n->tokens->[0] . "\n";
         }
         elsif ( $ref eq 'NotSQL' ) {
             $clean .= join '', @{ $n->tokens };
@@ -356,58 +392,63 @@ sub start_function {
     }
 
     my $block = Function->new(
-        val     => $start,
-        postval => $end,
-        parent  => $self->curr,
+        val    => $start,
+        endval => $end,
+        parent => $self->curr,
     );
 
     $self->add($block);
     $self->curr($block);
 }
 
+sub start_begin {
+    my $self = shift;
+
+    return $self->start_stmt('begin') unless $self->in_statement;
+
+    # must be a Trigger
+    $self->add_keyword('begin');
+
+    my $block = Block->new(
+        val      => '',
+        endval   => 'end',
+        real_end => Keywords->new(
+            val    => 'end',
+            parent => $self->curr,
+        ),
+        parent => $self->curr,
+    );
+
+    $self->add($block);
+    $self->curr($block);
+    return;
+}
+
 sub start_case {
     my $self = shift;
-    unless ( $self->curr_isa('Expr') ) {
-        my $e = Expr->new( parent => $self->curr );
-        $self->add($e);
-        $self->curr($e);
-    }
 
     $self->start_block(
         Keywords->new(
             val    => 'case',
             parent => $self->curr,
         ),
-        'end'
+        'end',
+        Keywords->new(
+            val    => 'end',
+            parent => $self->curr,
+        ),
     );
-    my $stmt = Statement->new( parent => $self->curr );
-    $self->add($stmt);
-    $self->curr($stmt);
-}
 
-sub end_case {
-    my $self = shift;
-
-    #    $self->add_keyword('end');
-    my $curr = $self->curr;
-    while ( refaddr($curr) != refaddr($self) ) {
-        if ( $curr->isa('Block') && lc( $curr->postval ) eq lc('end') ) {
-            my $end = Keywords->new( val => 'end', parent => $curr );
-            $curr->postval($end);
-            $self->curr( $curr->parent // $self );
-            $self->latest( $self->curr );
-            return;
-        }
-        $curr = $curr->parent // last;
-    }
-
-    # did not find the start block! Warn?
+    #    my $stmt = Statement->new( parent => $self->curr );
+    #    $self->add($stmt);
+    #    $self->curr($stmt);
 }
 
 sub start_block {
-    my $self  = shift;
-    my $start = shift;
-    my $end   = shift;
+    my $self     = shift;
+    my $start    = shift;
+    my $end      = shift;
+    my $real_end = shift;
 
     unless ( $self->curr_isa('Expr') ) {
         my $e = Expr->new( parent => $self->curr );
@@ -416,9 +457,10 @@ sub start_block {
     }
 
     my $block = Block->new(
-        val     => $start,
-        postval => $end,
-        parent  => $self->curr,
+        val      => $start,
+        endval   => $end,
+        real_end => $real_end,
+        parent   => $self->curr,
     );
 
     $self->add($block);
@@ -430,7 +472,7 @@ sub end_block {
     my $end  = shift;
     if ( my $curr = $self->curr ) {
         while ( refaddr($curr) != refaddr($self) ) {
-            if ( $curr->isa('Block') && lc( $curr->postval ) eq lc($end) ) {
+            if ( $curr->isa('Block') && lc( $curr->endval ) eq lc($end) ) {
                 $self->curr( $curr->parent // $self );
                 $self->latest( $self->curr );
                 return;
@@ -440,8 +482,10 @@ sub end_block {
     }
 
     # did not find the start block!
-    $self->add(
-        Tokens->new( val => $end . ' -- UNEXPECTED', parent => $self->curr ) );
+    $self->add( Tokens->new(
+        val    => $end . ' /* UNEXPECTED */',
+        parent => $self->curr
+    ) );
 }
 
 sub add_comment {
@@ -513,14 +557,30 @@ sub start_stmt {
     my $self = shift;
     my $val  = shift;
 
-    if ( $self->curr_isa('Expr') ) {    #special case for INSERT ... SELECT
-        $self->curr( $self->curr->parent );
-    }
-    elsif ( not $self->curr_isa('Statement') ) {
+    if ( not $self->in_statement ) {
         my $stmt = Statement->new( parent => $self->curr );
         $self->add($stmt);
         $self->curr($stmt);
     }
+
+    # break out
+    else {
+        until (
+                 $self->curr_isa('Statement')
+              or $self->curr_isa('Block')
+              or refaddr( $self->curr ) == refaddr($self)
+          )
+        {
+            $self->curr( $self->curr->parent );
+        }
+
+        if ( $self->curr_isa('Block') ) {
+            my $stmt = Statement->new( parent => $self->curr );
+            $self->add($stmt);
+            $self->curr($stmt);
+        }
+    }
+
     $self->add_keyword($val);
 }
 
@@ -529,7 +589,7 @@ sub end_stmt {
     my $val  = shift;
 
     if ( my $stmt = $self->in_statement ) {
-        $stmt->add( Tokens->new(
+        $stmt->add( EOS->new(
             val    => $val,
             parent => $self->curr,
         ) );
@@ -538,7 +598,7 @@ sub end_stmt {
     }
 
     # warn or not?
-    $self->add( Tokens->new(
+    $self->add( EOS->new(
         val    => $val,
         parent => $self->curr,
     ) );
@@ -572,7 +632,7 @@ sub add_inline {
     my $self = shift;
     my $val  = shift;
 
-    if ( $self->latest_isa('Inline') ) {
+    if ( $self->latest_isa('Inline') or $self->latest_isa('Keywords') ) {
         $self->latest->add($val);
         return;
     }
@@ -649,25 +709,22 @@ sub add_rest {
   require Carp;require Scalar::Util;our@ATTRS_UNEX=(undef);sub new {my$class=
   shift;my$self={@_ ? @_ > 1 ? @_ : %{$_[0]}: ()};if (@ATTRS_UNEX){map {local
   $Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::carp(
-  "SQLDoc attribute '$_' unexpected");delete$self->{$_ }}sort grep {not exists
-  $INLINE->{$_ }}keys %$self}else {@ATTRS_UNEX=map {delete$self->{$_ };$_}grep
-  {not exists$INLINE->{$_ }}keys %$self}bless$self,ref$class || $class;map {
-  $self->{$_ }=eval {$INLINE->{$_ }->{'isa'}->($self->{$_ })};Carp::croak(
-  qq{SQLDoc::$_ value invalid ($@)})if $@}grep {exists$self->{$_ }}'latest';
-  map {Scalar::Util::weaken($self->{$_ })}grep {defined$self->{$_ }// undef}
-  'latest';$self}sub __ro {my (undef,undef,undef,$sub)=caller(1);local
-  $Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::croak(
-  "attribute $sub is read-only (value: '" .($_[1]// 'undef')."')")}sub curr {
-  if (@_ > 1){$_[0]{'curr'}=$_[1];return $_[0]}$_[0]{'curr'}//= $INLINE->{
-  'curr'}->{'default'}->($_[0])}sub debug {$_[0]->__ro($_[1])if @_ > 1;$_[0]{
-  'debug'}// undef}sub latest {if (@_ > 1){$_[0]{'latest'}=eval {$INLINE->{
-  'latest'}->{'isa'}->($_[1])};Carp::croak('invalid (SQLDoc::latest) value: '.
-  $@)if $@;Scalar::Util::weaken($_[0]{'latest'})if defined $_[1];return $_[0]}
-  $_[0]{'latest'}// undef}sub start_indent {if (@_ > 1){$_[0]{'start_indent'}=
-  $_[1];return $_[0]}$_[0]{'start_indent'}//= $INLINE->{'start_indent'}->{
-  'default'}}sub tokens {if (@_ > 1){$_[0]{'tokens'}=$_[1];return $_[0]}$_[0]{
-  'tokens'}//= $INLINE->{'tokens'}->{'default'}->($_[0])}BEGIN{$INC{
-  'SQLDoc.pm'}//= __FILE__}
+  "SQL::Tidy attribute '$_' unexpected");delete$self->{$_ }}sort grep {not
+  exists$INLINE->{$_ }}keys %$self}else {@ATTRS_UNEX=map {delete$self->{$_ };
+  $_}grep {not exists$INLINE->{$_ }}keys %$self}bless$self,ref$class || $class
+  ;map {$self->{$_ }=eval {$INLINE->{$_ }->{'isa'}->($self->{$_ })};
+  Carp::croak(qq{SQL::Tidy::$_ value invalid ($@)})if $@}grep {exists$self->{
+  $_ }}'latest';map {Scalar::Util::weaken($self->{$_ })}grep {defined$self->{
+  $_ }// undef}'latest';$self}sub curr {if (@_ > 1){$_[0]{'curr'}=$_[1];return
+  $_[0]}$_[0]{'curr'}//= $INLINE->{'curr'}->{'default'}->($_[0])}sub latest {
+  if (@_ > 1){$_[0]{'latest'}=eval {$INLINE->{'latest'}->{'isa'}->($_[1])};
+  Carp::croak('invalid (SQL::Tidy::latest) value: '.$@)if $@;
+  Scalar::Util::weaken($_[0]{'latest'})if defined $_[1];return $_[0]}$_[0]{
+  'latest'}// undef}sub start_indent {if (@_ > 1){$_[0]{'start_indent'}=$_[1];
+  return $_[0]}$_[0]{'start_indent'}//= $INLINE->{'start_indent'}->{'default'}
+  }sub tokens {if (@_ > 1){$_[0]{'tokens'}=$_[1];return $_[0]}$_[0]{'tokens'}
+  //= $INLINE->{'tokens'}->{'default'}->($_[0])}BEGIN{$INC{'SQL/Tidy.pm'}//=
+  __FILE__}
 #>>>
 ### DO NOT EDIT ABOVE! (generated by Class::Inline v0.0.1)
 
@@ -734,6 +791,9 @@ use parent 'Tokens';
 package BoolOp;
 use strict;
 use warnings;
+use parent 'Tokens';
+
+package EOS;
 use parent 'Tokens';
 
 package Expr;
@@ -829,11 +889,12 @@ use strict;
 use warnings;
 
 our $INLINE = {
-    CLASS   => { inc      => 1, },
-    val     => { required => 1, },
-    parent  => { required => 1, weaken => 1, },
-    postval => { is       => 'rw', required => 1, },
-    tokens  => { is       => 'rw', default => sub { [] }, },
+    CLASS    => { inc      => 1, },
+    val      => { required => 1, },
+    parent   => { required => 1, weaken => 1, },
+    endval   => { required => 1, },
+    real_end => { is       => 'rw' },
+    tokens   => { is       => 'rw', default => sub { [] }, },
 };
 
 sub add {
@@ -842,23 +903,29 @@ sub add {
     push @{ $self->tokens }, $val;
 }
 
+sub end {
+    my $self = shift;
+    $self->real_end // $self->endval;
+}
+
 ### DO NOT EDIT BELOW! (generated by Class::Inline v0.0.1)
 #<<<
   require Carp;require Scalar::Util;our@ATTRS_UNEX=(undef);sub new {my$class=
   shift;my$self={@_ ? @_ > 1 ? @_ : %{$_[0]}: ()};map {local$Carp::CarpLevel=
   $Carp::CarpLevel + 1;Carp::croak("missing attribute Block::$_ is required")
-  unless exists$self->{$_}}'parent','postval','val';if (@ATTRS_UNEX){map {
-  local$Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::carp(
+  unless exists$self->{$_}}'endval','parent','val';if (@ATTRS_UNEX){map {local
+  $Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::carp(
   "Block attribute '$_' unexpected");delete$self->{$_ }}sort grep {not exists
   $INLINE->{$_ }}keys %$self}else {@ATTRS_UNEX=map {delete$self->{$_ };$_}grep
   {not exists$INLINE->{$_ }}keys %$self}bless$self,ref$class || $class;map {
   Scalar::Util::weaken($self->{$_ })}grep {defined$self->{$_ }// undef}
   'parent';$self}sub __ro {my (undef,undef,undef,$sub)=caller(1);local
   $Carp::CarpLevel=$Carp::CarpLevel + 1;Carp::croak(
-  "attribute $sub is read-only (value: '" .($_[1]// 'undef')."')")}sub parent
-  {$_[0]->__ro($_[1])if @_ > 1;$_[0]{'parent'}}sub postval {if (@_ > 1){$_[0]{
-  'postval'}=$_[1];return $_[0]}$_[0]{'postval'}}sub tokens {if (@_ > 1){$_[0]
-  {'tokens'}=$_[1];return $_[0]}$_[0]{'tokens'}//= $INLINE->{'tokens'}->{
+  "attribute $sub is read-only (value: '" .($_[1]// 'undef')."')")}sub endval
+  {$_[0]->__ro($_[1])if @_ > 1;$_[0]{'endval'}}sub parent {$_[0]->__ro($_[1])
+  if @_ > 1;$_[0]{'parent'}}sub real_end {if (@_ > 1){$_[0]{'real_end'}=$_[1];
+  return $_[0]}$_[0]{'real_end'}// undef}sub tokens {if (@_ > 1){$_[0]{
+  'tokens'}=$_[1];return $_[0]}$_[0]{'tokens'}//= $INLINE->{'tokens'}->{
   'default'}->($_[0])}sub val {$_[0]->__ro($_[1])if @_ > 1;$_[0]{'val'}}BEGIN{
   $INC{'Block.pm'}//= __FILE__}
 #>>>
