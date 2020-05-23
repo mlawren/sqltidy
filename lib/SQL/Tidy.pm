@@ -7,6 +7,13 @@ use Scalar::Util 'refaddr';
 use Types::Standard (qw/Maybe Object/);
 our $VERSION = '0.0.1';
 
+sub sqltidy {
+    my $messy = shift // Carp::croak 'sqltidy: input undefined';
+    my $sql   = __PACKAGE__->new;
+    $sql->parse($messy);
+    $sql->tree2sql;
+}
+
 our $INLINE = {
     CLASS => { inc => 1, },
     curr  => {
