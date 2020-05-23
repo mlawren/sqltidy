@@ -1,0 +1,182 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use OptArgs2;
+
+arg db => (
+    isa      => 'Str',
+    required => 1,
+    comment  => 'SQLite database to tidy',
+);
+
+opt help => (
+    isa     => 'Flag',
+    ishelp  => 1,
+    alias   => 'h',
+    comment => 'print full help message and exit',
+);
+
+opt inplace => (
+    isa     => 'Flag',
+    hidden  => 1,
+    comment => '*WARNING* update the database schema *WARNING*',
+);
+
+my $opts = optargs;
+
+require DBIx::ThinSQL;
+DBIx::ThinSQL->import('case');
+my $db = DBIx::ThinSQL->connect( 'dbi:SQLite:dbname=' . $opts->{db} );
+
+require SQL::Tidy;
+$db->sqlite_create_function( 'sqltidy', 1, \&SQL::Tidy::sqltidy );
+
+if ( $opts->{inplace} ) {
+
+    $db->txn( sub {
+
+        $db->do('PRAGMA writable_schema=ON');
+
+        if ( $opts->{reorder} ) {
+            $db->xdo(
+                create_temporary_table => '_master',
+                as_select              => '*',
+                from                   => 'sqlite_master',
+            );
+
+            $db->do('DELETE FROM sqlite_master');
+
+            my @rows = $db->xdo(
+                insert_into => [
+                    'sqlite_master',
+                    qw/tbl_name type name tbl_name rootpage sql/
+                ],
+                select => [
+                    qw/tbl_name type name tbl_name rootpage/,
+                    case (
+                        when => 'sql IS NOT NULL',
+                        then => \'sqltidy(sql)'
+                    ),
+                ],
+                from     => 'temp._master',
+                order_by => [
+                    'tbl_name',
+                    case (    # q{instr('table,index,view,trigger',type)}
+                        when => { type => 'table' },
+                        then => 1,
+                        when => { type => 'index' },
+                        then => 2,
+                        when => { type => 'view' },
+                        then => 3,
+                        when => { type => 'trigger' },
+                        then => 4,
+                        else => 9,
+                    ),
+                    'name',
+                ],
+            );
+
+            $db->do('DROP TABLE temp._master');
+        }
+        else {
+            $db->xdo(
+                update => 'sqlite_master',
+                set    => { sql => \'sqltidy(sql)' },
+                where  => { 'sql!' => undef },
+            );
+        }
+
+        $db->do('PRAGMA writable_schema=OFF');
+    } );
+
+}
+else {
+    my $sth = $db->xsth(
+        select   => 'sqltidy(sql)',
+        from     => 'sqlite_master',
+        where    => { 'sql!' => undef },
+        order_by => [
+            'tbl_name',
+            case (    # q{instr('table,index,view,trigger',type)}
+                when => { type => 'table' },
+                then => 1,
+                when => { type => 'index' },
+                then => 2,
+                when => { type => 'view' },
+                then => 3,
+                when => { type => 'trigger' },
+                then => 4,
+                else => 9,
+            ),
+            'name',
+        ],
+    );
+
+    require SQL::Tidy::Pager;
+    local $ENV{'LESS'} = '-FXeR';
+    my $pager = SQL::Tidy::Pager->new;
+    $pager->open;
+
+    while ( my $sql = $sth->val ) {
+        print $sql, ";\n\n";
+    }
+}
+
+1;
+
+__END__
+
+=head1 NAME
+
+sqltidy-sqlite - format and indent an SQLite database schema
+
+=head1 SYNOPSIS
+
+    sqltidy-sqlite DB [OPTIONS...]
+
+=head1 DESCRIPTION
+
+The B<sqltidy-sqlite> tool prints to I<stdout> the SQL schema of the
+SQLite database I<DB> in an aesthetically pleasing way.
+
+=head1 OPTIONS
+
+=over
+
+=item --help
+
+Print a help message and exit.
+
+=item --inplace
+
+Instead of printing the tidied SQL, actually tidy and sort the schema
+in I<DB>.  This has the effect of making the SQLite C<.dump> and
+C<.schema> commands produce a consistent output.
+
+B<Note:> this mucks about with the C<sqlite_master> table and can
+potentially corrupt your database! It is not recommend unless you have
+a known good backup of I<DB>. This software comes with NO WARRANTY!
+
+=back
+
+=head1 EXIT VALUE
+
+This command exists with a value of 0 on success.
+
+=head1 SEE ALSO
+
+L<SQL::Tidy>
+
+=head1 AUTHOR
+
+Mark Lawrence E<lt>nomad@null.netE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2020 Mark Lawrence <nomad@null.net>
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation; either version 3 of the License, or (at your
+option) any later version.
+

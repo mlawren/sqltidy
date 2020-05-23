@@ -14,4 +14,9 @@ on test => sub {
     requires 'Test::More';
 };
 
+feature 'sqltidy-sqlite', 'SQLite database support' => sub {
+    recommends 'DBIx::ThinSQL';
+    recommends 'DBD::SQLite';
+};
+
 # vim: ft=perl

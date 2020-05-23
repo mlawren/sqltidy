@@ -10,7 +10,7 @@ WriteMakefile(
     AUTHOR       => 'Mark Lawrence <nomad@null.net>',
     VERSION_FROM => 'lib/SQL/Tidy.pm',
     LICENSE      => 'gpl_3',
-    EXE_FILES    => ['bin/sqltidy'],
+    EXE_FILES    => [ 'bin/sqltidy', 'bin/sqltidy-sqlite' ],
     test         => {
         RECURSIVE_TEST_FILES => 1,
     },
