@@ -1,29 +1,37 @@
-Sample Usage - in place editing:
+NAME
+    SQL::Tidy - parse and prettify SQL text
 
-    cat sample.sql | ./sqltidy
+SYNOPSIS
+        use SQL::Tidy;
+        my $sqlt   = SQL::Tidy->new(
+            indent    => 4,
+        );
+        my $sql = $sqlt->parse($SQL);
 
-Sample Usage - file mode:
+DESCRIPTION
+    Parses SQL text and reformats it nicely indented.
 
-    ./sqltidy sample.sql
+CONSTRUCTOR
+    The "new()" constructor takes the following arguments:
 
+    indent (scalar, default is four ' ' spaces)
+        How to indent each sub-level by when tidying.
 
-For additional usage information, run:
-./sqltidy --help
+    preserve_leading (boolean, default is true)
+        Set to keep same overall indent as original.
 
-DEVELOPER NOTES:
+    uppercase (boolean, default is true)
+        Set to uppercase SQL keywords when tidying.
 
-This tool takes SQL and reformats it in an aesthetically pleasing way.
-It doesn't follow any standard formatting convention, nor is it even
-that consistent with itself (lots of special cases), but it makes SQL
-much more bearable to look at.
+ATTRIBUTES
+METHODS
+    parse($sql) -> $tidy_sql
+        Takes the input SQL text to be parsed and returns a tidy
+        version.
 
-The script tries to leave the original code alone as much as possible.
-It doesn't make any obnoxious capitalization changes or add in any new
-keywords.
+AUTHOR
+    Mark Lawrence <nomad@null.net>.
 
-The best implementation of this tool will be able to parse SQL as well
-as an interpreter, and know all about all the keywords and functions.
-This script is nothing like that.  It's just a quick hackjob that does
-basic tokenization and tries to fail gracefully when it's not smart
-enough.
+COPYRIGHT AND LICENSE
+    Copyright 2020 Mark Lawrence <nomad@null.net>
 
