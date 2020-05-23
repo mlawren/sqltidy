@@ -106,6 +106,7 @@ if ( $opts->{inplace} ) {
 }
 else {
     require SQL::Tidy::Pager;
+    local $ENV{'LESS'} = '-FXeR';
     my $pager = SQL::Tidy::Pager->new;
     $pager->open;
     print $output;
