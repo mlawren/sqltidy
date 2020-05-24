@@ -67,7 +67,7 @@ my @INLINE = sort { length $b <=> length $a } (
       ABORT AFTER CROSS FIRST NULLS OUTER QUERY RAISE
       TABLE USING CAST EACH FAIL
       FULL INTO LAST PLAN TEMP TIES VIEW
-      ALL END ROW BY DO IF NO OF TO
+      ALL END ROW BY IF NO OF TO
 
       /, 'on\\ delete', 'on\\ update'
 );
@@ -75,7 +75,7 @@ my @INLINE = sort { length $b <=> length $a } (
 my @KEYWORDS = sort { length $b <=> length $a } (
     qw/
       FROM INNER LEFT RIGHT JOIN WHERE GROUP HAVING UNION
-      THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD
+      THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD DO
       /
 );
 
@@ -83,13 +83,14 @@ my $stmt_re      = join '|', @STMT;
 my $keywords_re  = join '|', @KEYWORDS;
 my $inline_re    = join '|', @INLINE;
 my $boolop_re    = join '|', @BOOLOPS;
-my $operators_re = join '|', map { s!([|/*+])!\\$1!gr } @OPERATORS;
+my $operators_re = join '|', map { s{([|/*+])}{\\$1}gr } @OPERATORS;
 
 my $ws_re       = qr/ [\ \t]+ /sx;
+my $leadws_re   = qr/ (?m) ^ $ws_re /sx;
 my $wb_re       = qr/ \b | [$ \ \n \t] /sx;
 my $scomment_re = qr/ -- \N* \n? /sx;
 my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
-my $shell_re    = qr/ ^\. \N* \n? /mx;
+my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
 my $passthru_re = qr/ $comment_re | $shell_re /x;
 my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
                      | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
@@ -102,24 +103,25 @@ my $expr_re = qr/ $column_re | $string_re | $operators_re | $num_re | \?  /x;
 our $__doc;
 my $re = qr!
   (?:
-      (BEGIN)$wb_re        (?{ $__doc->start_begin($^N); })
-    | ($stmt_re)$wb_re     (?{ $__doc->start_stmt($^N); })
-    | \(                   (?{ $__doc->start_block( qw/ ( ) / ); })
-    | (\))                 (?{ $__doc->end_block( $^N ); })
-    | (CASE)$wb_re         (?{ $__doc->start_case(); })
-    | (END)$wb_re          (?{ $__doc->end_block( $^N ); })
-    | ($inline_re)$wb_re   (?{ $__doc->add_inline($^N); })
-    | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N); })
-    | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N); })
-    | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
-    | ($scomment_re)       (?{ $__doc->add_comment($^N); })
-    | ($passthru_re)       (?{ $__doc->add_passthru($^N); })
-    | ($expr_re)           (?{ $__doc->add_expr($^N); })
-    | ,                    (?{ $__doc->make_list; })
-    | ;                    (?{ $__doc->end_stmt(';'); })
-    | ((?m) ^ $ws_re)      (?{ $__doc->add_leadws($^N); })
-    | ($ws_re)             (?{ $__doc->add_ws($^N); })
-    | (.)                  (?{ $__doc->add_rest($^N); })
+      (BEGIN)$wb_re        (?{ warn 1;$__doc->start_begin($^N); })
+    | ($stmt_re)$wb_re     (?{ warn 1;$__doc->start_stmt($^N); })
+    | \(                   (?{ warn 1;$__doc->start_block( qw/ ( ) / ); })
+    | (\))                 (?{ warn 1;$__doc->end_block( $^N ); })
+    | (CASE)$wb_re         (?{ warn 1;$__doc->start_case(); })
+    | (END)$wb_re          (?{ warn 1;$__doc->end_block( $^N ); })
+    | ($inline_re)$wb_re   (?{ warn 1;$__doc->add_inline($^N); })
+    | ($keywords_re)$wb_re (?{ warn 1;$__doc->add_keyword($^N); })
+    | ($operators_re)$wb_re   (?{ warn 1;$__doc->add_op($^N); })
+    | ($boolop_re)$wb_re   (?{ warn 1;$__doc->add_boolop($^N); })
+    | ($word_re)\s*\(      (?{ warn 1;$__doc->start_function( $^N.'(', ')' ); })
+    | ($scomment_re)       (?{ warn 1;$__doc->add_comment($^N); })
+    | ($passthru_re)       (?{ warn 7; $__doc->add_passthru($^N); })
+    | ($expr_re)           (?{ warn 6; $__doc->add_expr($^N); })
+    | ,                    (?{ warn 5; $__doc->make_list; })
+    | ;                    (?{ warn 4; $__doc->end_stmt(';'); })
+    | ($leadws_re)         (?{ warn 3; $__doc->add_leadws($^N); })
+    | (\s*\n | $ws_re)     (?{ warn 3; $__doc->add_ws($^N); })
+    | (.)                 (?{ warn 1; $__doc->add_rest($^N); })
   )
 !ix;
 
@@ -332,6 +334,9 @@ sub tree2sql {
         }
         elsif ( $ref eq 'Indent' ) {
             $lead_ws = $n->tokens->[0] =~ s/\t/$extra/gr;
+        }
+        elsif ( $ref eq 'Op' ) {
+            $clean .= $n->tokens->[0];
         }
         elsif ( $ref eq 'NotSQL' ) {
             $clean .= join '', @{ $n->tokens };
@@ -581,16 +586,6 @@ sub end_stmt {
     ) );
 }
 
-sub add_newline {
-    my $self = shift;
-    return if $self->in_statement;
-
-    $self->add( Tokens->new(
-        val    => "\n",
-        parent => $self->curr,
-    ) );
-}
-
 sub add_leadws {
     my $self = shift;
     my $val  = shift;
@@ -604,7 +599,16 @@ sub add_ws {
     my $val  = shift;
 
     return if $self->in_statement;
-    $self->add_rest($val);
+    $self->add( NotSQL->new(
+        val    => $val =~ m/\n/ ? "\n" : $val,
+        parent => $self->curr,
+    ) );
+}
+
+sub add_op {
+    my $self = shift;
+    my $val  = shift;
+    $self->add( Op->new( val => $val, parent => $self->curr, ) );
 }
 
 sub add_boolop {
@@ -768,6 +772,11 @@ use warnings;
 use parent 'Tokens';
 
 package Inline;
+use strict;
+use warnings;
+use parent 'Tokens';
+
+package Op;
 use strict;
 use warnings;
 use parent 'Tokens';
