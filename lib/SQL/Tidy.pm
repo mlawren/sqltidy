@@ -63,7 +63,7 @@ my @INLINE = sort { length $b <=> length $a } (
       CONFLICT DATABASE DEFERRED DISTINCT RESTRICT BETWEEN
       CURRENT INDEXED NATURAL NOTHING
       TRIGGER VIRTUAL WITHOUT ACTION ALWAYS BEFORE ESCAPE EXCEPT EXISTS
-      FILTER IGNORE OTHERS RENAME VALUES WINDOW
+      FILTER IGNORE OTHERS VALUES WINDOW
       ABORT AFTER CROSS FIRST NULLS OUTER QUERY RAISE
       TABLE USING CAST EACH FAIL
       FULL INTO LAST PLAN TEMP TIES VIEW
@@ -75,20 +75,20 @@ my @INLINE = sort { length $b <=> length $a } (
 my @KEYWORDS = sort { length $b <=> length $a } (
     qw/
       FROM INNER LEFT RIGHT JOIN WHERE GROUP HAVING UNION
-      THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD DO
+      THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD DO RENAME
       /
 );
 
-my $stmt_re      = join '|', @STMT;
-my $keywords_re  = join '|', @KEYWORDS;
-my $inline_re    = join '|', @INLINE;
-my $boolop_re    = join '|', @BOOLOPS;
-my $operators_re = join '|', map { s{([|/*+])}{\\$1}gr } @OPERATORS;
+my $stmt_re     = join '|', @STMT;
+my $keywords_re = join '|', @KEYWORDS;
+my $inline_re   = join '|', @INLINE;
+my $boolop_re   = join '|', @BOOLOPS;
+my $op_re       = join '|', map { s{([|/*+])}{\\$1}gr } @OPERATORS;
 
-my $ws_re       = qr/ [\ \t]+ /sx;
-my $leadws_re   = qr/ (?m) ^ $ws_re /sx;
+my $ws_re       = qr/ [\ \t] /sx;
+my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
 my $wb_re       = qr/ \b | [$ \ \n \t] /sx;
-my $scomment_re = qr/ -- \N* \n? /sx;
+my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
 my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
 my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
 my $passthru_re = qr/ $comment_re | $shell_re /x;
@@ -98,30 +98,30 @@ my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
 my $identifier_re = qr/ (?: " [^"]* " | $word_re ) /x;
 my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
 my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
-my $expr_re = qr/ $column_re | $string_re | $operators_re | $num_re | \?  /x;
+my $expr_re       = qr/ $column_re | $string_re | $op_re | $num_re | \?  /x;
 
 our $__doc;
 my $re = qr!
   (?:
-      (BEGIN)$wb_re        (?{ warn 1;$__doc->start_begin($^N); })
-    | ($stmt_re)$wb_re     (?{ warn 1;$__doc->start_stmt($^N); })
-    | \(                   (?{ warn 1;$__doc->start_block( qw/ ( ) / ); })
-    | (\))                 (?{ warn 1;$__doc->end_block( $^N ); })
-    | (CASE)$wb_re         (?{ warn 1;$__doc->start_case(); })
-    | (END)$wb_re          (?{ warn 1;$__doc->end_block( $^N ); })
-    | ($inline_re)$wb_re   (?{ warn 1;$__doc->add_inline($^N); })
-    | ($keywords_re)$wb_re (?{ warn 1;$__doc->add_keyword($^N); })
-    | ($operators_re)$wb_re   (?{ warn 1;$__doc->add_op($^N); })
-    | ($boolop_re)$wb_re   (?{ warn 1;$__doc->add_boolop($^N); })
-    | ($word_re)\s*\(      (?{ warn 1;$__doc->start_function( $^N.'(', ')' ); })
-    | ($scomment_re)       (?{ warn 1;$__doc->add_comment($^N); })
-    | ($passthru_re)       (?{ warn 7; $__doc->add_passthru($^N); })
-    | ($expr_re)           (?{ warn 6; $__doc->add_expr($^N); })
-    | ,                    (?{ warn 5; $__doc->make_list; })
-    | ;                    (?{ warn 4; $__doc->end_stmt(';'); })
-    | ($leadws_re)         (?{ warn 3; $__doc->add_leadws($^N); })
-    | (\s*\n | $ws_re)     (?{ warn 3; $__doc->add_ws($^N); })
-    | (.)                 (?{ warn 1; $__doc->add_rest($^N); })
+      (BEGIN)$wb_re        (?{ $__doc->start_begin($^N);            })
+    | ($stmt_re)$wb_re     (?{ $__doc->start_stmt($^N);             })
+    | \(                   (?{ $__doc->start_block( qw/ ( ) / );    })
+    | (\))                 (?{ $__doc->end_block( $^N );            })
+    | (CASE)$wb_re         (?{ $__doc->start_case();                })
+    | (END)$wb_re          (?{ $__doc->end_block( $^N );            })
+    | ($inline_re)$wb_re   (?{ $__doc->add_inline($^N);             })
+    | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N);            })
+    | ($op_re)$wb_re       (?{ $__doc->add_op($^N);                 })
+    | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N);             })
+    | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
+    | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
+    | ($passthru_re)       (?{ $__doc->add_passthru($^N);           })
+    | ($expr_re)           (?{ $__doc->add_expr($^N);               })
+    | ,                    (?{ $__doc->make_list;                   })
+    | ;                    (?{ $__doc->end_stmt(';');               })
+    | ($leadws_re)         (?{ $__doc->add_leadws($^N);             })
+    | (\s*\n | $ws_re+)    (?{ $__doc->add_ws($^N);                 })
+    | (.)                  (?{ $__doc->add_rest($^N);               })
   )
 !ix;
 
