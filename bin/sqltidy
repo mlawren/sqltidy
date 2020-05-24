@@ -96,7 +96,7 @@ else {
 }
 
 require SQL::Tidy;
-my $sql = SQL::Tidy->new();
+my $sql = SQL::Tidy->new( indent => $opts->{indent} );
 $sql->parse( $opts->{sql} );
 my $output = ( $opts->{debug} ? $sql->tree2ast : '' ) . $sql->tree2sql;
 

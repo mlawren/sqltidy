@@ -7,23 +7,23 @@ use Scalar::Util 'refaddr';
 use Types::Standard (qw/Maybe Object/);
 our $VERSION = '0.0.1';
 
-sub sqltidy {
-    my $messy = shift // Carp::croak 'sqltidy: input undefined';
-    my $sql   = __PACKAGE__->new;
-    $sql->parse($messy);
-    $sql->tree2sql;
-}
-
 our $INLINE = {
     CLASS => { inc => 1, },
     curr  => {
         is      => 'rw',
         default => sub { $_[0] }
     },
-    latest       => { isa => Maybe [Object], is      => 'rw', weaken => 1, },
-    start_indent => { is  => 'rw',           default => '' },
-    tokens       => { is  => 'rw',           default => sub { [] }, },
+    indent => { is => 'rw', default => 4, },
+    latest => { isa => Maybe [Object], is => 'rw', weaken => 1, },
+    tokens => { is => 'rw', default => sub { [] }, },
 };
+
+sub sqltidy {
+    my $messy = shift // Carp::croak 'sqltidy: input undefined';
+    my $sql   = __PACKAGE__->new(@_);
+    $sql->parse($messy);
+    $sql->tree2sql;
+}
 
 my @OPERATORS = ( qw{
     || << >> <= >= == != <> * / % + - & | < > =
@@ -85,7 +85,8 @@ my $inline_re    = join '|', @INLINE;
 my $boolop_re    = join '|', @BOOLOPS;
 my $operators_re = join '|', map { s!([|/*+])!\\$1!gr } @OPERATORS;
 
-my $ws_re       = qr/ \b | [$ \ \n] /sx;
+my $ws_re       = qr/ [\ \t]+ /sx;
+my $wb_re       = qr/ \b | [$ \ \n \t] /sx;
 my $scomment_re = qr/ -- \N* \n? /sx;
 my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
 my $shell_re    = qr/ ^\. \N* \n? /mx;
@@ -101,24 +102,24 @@ my $expr_re = qr/ $column_re | $string_re | $operators_re | $num_re | \?  /x;
 our $__doc;
 my $re = qr!
   (?:
-     BEGIN$ws_re          (?{ $__doc->start_begin(); })
-    | ($stmt_re)$ws_re    (?{ $__doc->start_stmt($^N); })
-    | (\))               (?{ $__doc->end_block( $^N ); })
-    | (CASE)$ws_re         (?{ $__doc->start_case(); })
-    | (END)$ws_re         (?{ $__doc->end_block( $^N ); })
-    | ($inline_re)$ws_re   (?{ $__doc->add_inline($^N); })
-    | ($keywords_re)$ws_re (?{ $__doc->add_keyword($^N); })
-    | ($boolop_re)$ws_re   (?{ $__doc->add_boolop($^N); })
-    | ($word_re)\s*\(    (?{ $__doc->start_function( $^N.'(', ')' ); })
-    | \(                 (?{ $__doc->start_block( qw/ (     )   / ); })
-    | ($scomment_re)     (?{ $__doc->add_comment($^N); })
-    | ($passthru_re)     (?{ $__doc->add_passthru($^N); })
-    | ($expr_re)         (?{ $__doc->add_expr($^N); })
-    | ,                  (?{ $__doc->make_list; })
-    | \n+                (?{ $__doc->add_newline; })
-    | (\ +)              (?{ $__doc->add_ws($^N); })
-    | ;                  (?{ $__doc->end_stmt(';'); })
-    | (.)                (?{ $__doc->add_rest($^N); })
+      (BEGIN)$wb_re        (?{ $__doc->start_begin($^N); })
+    | ($stmt_re)$wb_re     (?{ $__doc->start_stmt($^N); })
+    | \(                   (?{ $__doc->start_block( qw/ ( ) / ); })
+    | (\))                 (?{ $__doc->end_block( $^N ); })
+    | (CASE)$wb_re         (?{ $__doc->start_case(); })
+    | (END)$wb_re          (?{ $__doc->end_block( $^N ); })
+    | ($inline_re)$wb_re   (?{ $__doc->add_inline($^N); })
+    | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N); })
+    | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N); })
+    | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
+    | ($scomment_re)       (?{ $__doc->add_comment($^N); })
+    | ($passthru_re)       (?{ $__doc->add_passthru($^N); })
+    | ($expr_re)           (?{ $__doc->add_expr($^N); })
+    | ,                    (?{ $__doc->make_list; })
+    | ;                    (?{ $__doc->end_stmt(';'); })
+    | ((?m) ^ $ws_re)      (?{ $__doc->add_leadws($^N); })
+    | ($ws_re)             (?{ $__doc->add_ws($^N); })
+    | (.)                  (?{ $__doc->add_rest($^N); })
   )
 !ix;
 
@@ -138,7 +139,6 @@ sub _reset {
     my $self = shift;
     $self->curr($self);
     $self->latest(undef);
-    $self->start_indent('');
     $self->tokens( [] );
 }
 
@@ -169,8 +169,8 @@ sub tree2ast {
             if ( $t->[1]->can('val') ) {
                 $clean .= '--| '
                   . $t->[0]
-                  . ref( $t->[1] ) . ': '
-                  . $t->[1]->val . "\n";
+                  . ref( $t->[1] ) . ': \''
+                  . $t->[1]->val . "'\n";
             }
             else {
                 $clean .= '--| ' . $t->[0] . ref( $t->[1] ) . ': ' . "\n";
@@ -187,41 +187,30 @@ sub tree2ast {
 sub tree2sql {
     my $self  = shift;
     my $clean = '';
-    my $extra = '    ';
+    my $extra = ' ' x $self->indent;
+    my $half  = ' ' x ( $self->indent / 2 );
     my $NL    = ["\n"];
     my $WS    = [' '];
     my @tok   = map { [$_] } @{ $self->tokens };
 
-    my $prev = '';
-    my $tok  = 0;
+    my $lead_ws = '';
+    my $tok     = 0;
     while ( my $t = shift @tok ) {
-        my ( $n, $ref, $indent ) = ( $t->[0], ref( $t->[0] ), $t->[1] // '' );
+        my ( $n, $ref, $indent ) =
+          ( $t->[0], ref( $t->[0] ), $t->[1] // $lead_ws );
         my $newindent = $indent . $extra;
         my @new;
+        $lead_ws = '';
 
         if ( $ref eq 'Statement' ) {
-            my $c_indent = ( $clean !~ m/\n$/ && $clean =~ m/( +)$/ ) ? $1 : '';
-            $indent    = length($c_indent) ? $c_indent : $indent;
-            $newindent = $indent . $extra;                         # recalculate
             my @list = @{ $n->tokens };
             my $i    = 0;
             while ( my $t = shift @list ) {
                 $ref = ref($t);
                 $i++;
-                my $nref = ref $list[0] // '';
 
                 if ( ref($t) eq 'Keywords' ) {
-                    if ( length $c_indent ) {
-                        push @new, [$t];
-                        $c_indent = '';
-                    }
-
-                    #                    elsif ( $i == 1 ) {
-                    #                        push @new, [$indent], [$t];
-                    #                    }
-                    else {
-                        push @new, ( $i > 1 ? $NL : () ), [$indent], [$t];
-                    }
+                    push @new, $i > 1 ? $NL : (), [$indent], [$t];
                 }
                 elsif ( $ref eq 'List' ) {
                     push @new, [ $t, $newindent ];
@@ -239,9 +228,6 @@ sub tree2sql {
                 elsif ( $ref eq 'Tokens' ) {
                     push @new, [ $t, $newindent ];
                 }
-                elsif ( $ref eq 'NotSQL' ) {    # generally a comment?
-                    push @new, [$indent], [ $t, $newindent ];
-                }
                 elsif ( $ref eq 'Comment' ) {
                     push @new, $WS, [$t];
                 }
@@ -251,24 +237,17 @@ sub tree2sql {
                 elsif ( $ref eq 'EOS' ) {       # End of Statement
                     push @new, [$t];
                 }
+                elsif ( $ref eq 'NotSQL' ) {    # generally a comment?
+                    push @new, [$t];
+                }
                 else {
                     warn 'unhandled ' . $ref;
                     push @new, [ ' /* UNHAND ' . $ref . ' */ ' ];
                 }
-                $prev = $ref;
             }
         }
         elsif ( $ref eq 'List' ) {
             my @items = @{ $n->tokens };
-
-   #            if (not grep {'Tokens' ne ref $_} map {@{$_->tokens} } @items) {
-   #                my $first  = shift @items;
-   #                push @new, [ $first, $newindent ];
-   #                foreach my $t (@items) {
-   #                    push @new, [','], $WS, [ $t, $newindent ];
-   #                }
-   #            }
-   #            else {
             my $first = shift @items;
             push @new, $NL, [$indent], [ $first, $newindent ];
             my $COMMA = [','];
@@ -282,8 +261,6 @@ sub tree2sql {
                     $COMMA = [','];
                 }
             }
-
-            #            }
         }
         elsif ( $ref eq 'Block' or $ref eq 'Function' ) {
             push @new, [ $n->val ];
@@ -316,7 +293,7 @@ sub tree2sql {
                 $i++;
             }
             push @new,
-              ( $complex ? ( $NL, [ '  ' . $indent =~ s/$extra//r ] ) : () ),
+              ( $complex ? ( $NL, [ $half . $indent =~ s/$extra//r ] ) : () ),
               [ $n->end ];
         }
         elsif ( $ref eq 'Expr' ) {
@@ -353,12 +330,15 @@ sub tree2sql {
         elsif ( $ref eq 'EOS' ) {
             $clean .= $n->tokens->[0] . "\n";
         }
+        elsif ( $ref eq 'Indent' ) {
+            $lead_ws = $n->tokens->[0] =~ s/\t/$extra/gr;
+        }
         elsif ( $ref eq 'NotSQL' ) {
             $clean .= join '', @{ $n->tokens };
         }
         else {
-            #            warn "unhandled X${n}X" unless $n eq ' ';
-            $clean .= $indent . $n;
+            # warn "unhandled X${n}X" unless;
+            $clean .= $n;
         }
         unshift @tok, @new;
     }
@@ -403,8 +383,9 @@ sub start_function {
 
 sub start_begin {
     my $self = shift;
+    my $val  = shift;
 
-    return $self->start_stmt('begin') unless $self->in_statement;
+    return $self->start_stmt($val) unless $self->in_statement;
 
     # must be a Trigger
     $self->add_keyword('begin');
@@ -438,10 +419,6 @@ sub start_case {
             parent => $self->curr,
         ),
     );
-
-    #    my $stmt = Statement->new( parent => $self->curr );
-    #    $self->add($stmt);
-    #    $self->curr($stmt);
 }
 
 sub start_block {
@@ -614,12 +591,20 @@ sub add_newline {
     ) );
 }
 
+sub add_leadws {
+    my $self = shift;
+    my $val  = shift;
+
+    return if $self->in_statement;
+    $self->add( Indent->new( val => $val, parent => $self->curr ) );
+}
+
 sub add_ws {
     my $self = shift;
     my $val  = shift;
+
     return if $self->in_statement;
-    $self->add( Tokens->new( val => $val, parent => $self->curr ) );
-    $self->start_indent($val);
+    $self->add_rest($val);
 }
 
 sub add_boolop {
@@ -638,8 +623,6 @@ sub add_inline {
     }
 
     unless ( $self->curr_isa('Expr') ) {
-
-        #    warn $val .' '.$self->curr;
         unless ( $self->in_statement ) {
             my $stmt = Statement->new( parent => $self->curr, );
             $self->add($stmt);
@@ -698,7 +681,9 @@ sub add_expr {
 sub add_rest {
     my $self = shift;
     my $val  = shift;
-    $self->add( Tokens->new(
+
+    warn "unknown SQL token '$val'" if $self->in_statement;
+    $self->add( NotSQL->new(
         val    => $val,
         parent => $self->curr,
     ) );
@@ -716,15 +701,14 @@ sub add_rest {
   Carp::croak(qq{SQL::Tidy::$_ value invalid ($@)})if $@}grep {exists$self->{
   $_ }}'latest';map {Scalar::Util::weaken($self->{$_ })}grep {defined$self->{
   $_ }// undef}'latest';$self}sub curr {if (@_ > 1){$_[0]{'curr'}=$_[1];return
-  $_[0]}$_[0]{'curr'}//= $INLINE->{'curr'}->{'default'}->($_[0])}sub latest {
-  if (@_ > 1){$_[0]{'latest'}=eval {$INLINE->{'latest'}->{'isa'}->($_[1])};
-  Carp::croak('invalid (SQL::Tidy::latest) value: '.$@)if $@;
-  Scalar::Util::weaken($_[0]{'latest'})if defined $_[1];return $_[0]}$_[0]{
-  'latest'}// undef}sub start_indent {if (@_ > 1){$_[0]{'start_indent'}=$_[1];
-  return $_[0]}$_[0]{'start_indent'}//= $INLINE->{'start_indent'}->{'default'}
-  }sub tokens {if (@_ > 1){$_[0]{'tokens'}=$_[1];return $_[0]}$_[0]{'tokens'}
-  //= $INLINE->{'tokens'}->{'default'}->($_[0])}BEGIN{$INC{'SQL/Tidy.pm'}//=
-  __FILE__}
+  $_[0]}$_[0]{'curr'}//= $INLINE->{'curr'}->{'default'}->($_[0])}sub indent {
+  if (@_ > 1){$_[0]{'indent'}=$_[1];return $_[0]}$_[0]{'indent'}//= $INLINE->{
+  'indent'}->{'default'}}sub latest {if (@_ > 1){$_[0]{'latest'}=eval {$INLINE
+  ->{'latest'}->{'isa'}->($_[1])};Carp::croak(
+  'invalid (SQL::Tidy::latest) value: '.$@)if $@;Scalar::Util::weaken($_[0]{
+  'latest'})if defined $_[1];return $_[0]}$_[0]{'latest'}// undef}sub tokens {
+  if (@_ > 1){$_[0]{'tokens'}=$_[1];return $_[0]}$_[0]{'tokens'}//= $INLINE->{
+  'tokens'}->{'default'}->($_[0])}BEGIN{$INC{'SQL/Tidy.pm'}//= __FILE__}
 #>>>
 ### DO NOT EDIT ABOVE! (generated by Class::Inline v0.0.1)
 
@@ -794,6 +778,9 @@ use warnings;
 use parent 'Tokens';
 
 package EOS;
+use parent 'Tokens';
+
+package Indent;
 use parent 'Tokens';
 
 package Expr;
