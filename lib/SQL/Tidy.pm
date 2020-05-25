@@ -87,7 +87,7 @@ my $op_re       = join '|', map { s{([|/*+])}{\\$1}gr } @OPERATORS;
 
 my $ws_re       = qr/ [\ \t] /sx;
 my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
-my $wb_re       = qr/ \b | [$ \ \n \t] /sx;
+my $wb_re       = qr/ \b | [\ \n \t] | $ /sx;
 my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
 my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
 my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
@@ -111,7 +111,7 @@ my $re = qr!
     | (END)$wb_re          (?{ $__doc->end_block( $^N );            })
     | ($inline_re)$wb_re   (?{ $__doc->add_inline($^N);             })
     | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N);            })
-    | ($op_re)$wb_re       (?{ $__doc->add_op($^N);                 })
+    | ($op_re)       (?{ $__doc->add_op($^N);                 })
     | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N);             })
     | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
     | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
@@ -231,6 +231,9 @@ sub tree2sql {
                     push @new, [ $t, $newindent ];
                 }
                 elsif ( $ref eq 'Comment' ) {
+                    push @new, $WS, [$t];
+                }
+                elsif ( $ref eq 'Op' ) {
                     push @new, $WS, [$t];
                 }
                 elsif ( $ref eq 'BoolOp' ) {    # Window Function
