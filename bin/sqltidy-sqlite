@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use feature 'state';
 use OptArgs2;
 
 arg db => (
@@ -27,11 +28,18 @@ opt indent => (
 
 opt inplace => (
     isa     => 'Flag',
-    hidden  => 1,
     comment => '*WARNING* update the database schema *WARNING*',
 );
 
+opt extension => (
+    isa     => 'ArrayRef',
+    alias   => 'e',
+    default => sub { [] },
+    comment => 'extension(s) to load when testing inplace changes',
+);
+
 my $opts = optargs;
+die "database not found: $opts->{db}\n" unless -e $opts->{db};
 
 require DBIx::ThinSQL;
 DBIx::ThinSQL->import('case');
@@ -42,65 +50,86 @@ $db->sqlite_create_function(
     'sqltidy',
     1,
     sub {
-        SQL::Tidy::sqltidy( $_[0], indent => $opts->{indent} );
+        defined $_[0]
+          ? SQL::Tidy::sqltidy( $_[0], indent => $opts->{indent} )
+          : undef;
     }
 );
 
 if ( $opts->{inplace} ) {
 
     $db->txn( sub {
+        $db->xdo(
+            create_temporary_table => '_master',
+            as_select              => [
+                'tbl_name', 'type', 'name', 'rootpage', 'sqltidy(sql) AS sql',
+            ],
+            from     => 'sqlite_master',
+            order_by => [
+                'tbl_name',
+                case (    # q{instr('table,index,view,trigger',type)}
+                    when => { type => 'table' },
+                    then => 1,
+                    when => { type => 'index' },
+                    then => 2,
+                    when => { type => 'view' },
+                    then => 3,
+                    when => { type => 'trigger' },
+                    then => 4,
+                    else => 9,
+                ),
+                'name',
+            ],
+        );
+
+        my $sth = $db->xsth(
+            select   => '*',
+            from     => 'temp._master',
+            where    => { 'name !like' => 'sqlite_autoindex_%' },
+            order_by => 'rowid',
+        );
+
+        my $memdb = DBIx::ThinSQL->connect('dbi:SQLite:dbname=:memory:');
+        foreach my $ext ( @{ $opts->{extension} } ) {
+            state $enable = $memdb->sqlite_enable_load_extension(1);
+            $memdb->do( 'SELECT load_extension(?)', undef, $ext );
+        }
+
+        $memdb->txn( sub {
+            while ( my $ref = $sth->hashref ) {
+
+                # Some things (e.g. auto_indexes and extension tables)
+                # can be ignored
+                next unless defined $ref->{sql};
+                next
+                  if $memdb->xval(
+                    select => 1,
+                    from   => 'sqlite_master',
+                    where  => {
+                        tbl_name => $ref->{tbl_name},
+                        type     => $ref->{type},
+                        name     => $ref->{name},
+                    },
+                  );
+
+                $memdb->do( $ref->{sql} );
+            }
+        } );
+
+        $memdb->disconnect;
 
         $db->do('PRAGMA writable_schema=ON');
+        $db->do('DELETE FROM sqlite_master');
 
-        if ( $opts->{reorder} ) {
-            $db->xdo(
-                create_temporary_table => '_master',
-                as_select              => '*',
-                from                   => 'sqlite_master',
-            );
+        $db->xdo(
+            insert_into =>
+              [ 'sqlite_master', qw/tbl_name type name rootpage sql/ ],
+            select   => [ qw/tbl_name type name rootpage sql/, ],
+            from     => 'temp._master',
+            order_by => 'rowid',
+        );
 
-            $db->do('DELETE FROM sqlite_master');
-
-            my @rows = $db->xdo(
-                insert_into => [
-                    'sqlite_master',
-                    qw/tbl_name type name tbl_name rootpage sql/
-                ],
-                select => [
-                    qw/tbl_name type name tbl_name rootpage/,
-                    case (
-                        when => 'sql IS NOT NULL',
-                        then => \'sqltidy(sql)'
-                    ),
-                ],
-                from     => 'temp._master',
-                order_by => [
-                    'tbl_name',
-                    case (    # q{instr('table,index,view,trigger',type)}
-                        when => { type => 'table' },
-                        then => 1,
-                        when => { type => 'index' },
-                        then => 2,
-                        when => { type => 'view' },
-                        then => 3,
-                        when => { type => 'trigger' },
-                        then => 4,
-                        else => 9,
-                    ),
-                    'name',
-                ],
-            );
-
-            $db->do('DROP TABLE temp._master');
-        }
-        else {
-            $db->xdo(
-                update => 'sqlite_master',
-                set    => { sql => \'sqltidy(sql)' },
-                where  => { 'sql!' => undef },
-            );
-        }
-
+        $db->do('DROP TABLE temp._master');
         $db->do('PRAGMA writable_schema=OFF');
     } );
 
