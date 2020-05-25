@@ -16,6 +16,15 @@ opt help => (
     comment => 'print full help message and exit',
 );
 
+opt indent => (
+    isa          => 'Int',
+    isa_name     => 'COUNT',
+    alias        => 'i',
+    default      => 4,
+    comment      => 'number of spaces to indent',
+    show_default => 1,
+);
+
 opt inplace => (
     isa     => 'Flag',
     hidden  => 1,
@@ -29,7 +38,13 @@ DBIx::ThinSQL->import('case');
 my $db = DBIx::ThinSQL->connect( 'dbi:SQLite:dbname=' . $opts->{db} );
 
 require SQL::Tidy;
-$db->sqlite_create_function( 'sqltidy', 1, \&SQL::Tidy::sqltidy );
+$db->sqlite_create_function(
+    'sqltidy',
+    1,
+    sub {
+        SQL::Tidy::sqltidy( $_[0], indent => $opts->{indent} );
+    }
+);
 
 if ( $opts->{inplace} ) {
 
@@ -137,11 +152,20 @@ sqltidy-sqlite - format and indent an SQLite database schema
 =head1 DESCRIPTION
 
 The B<sqltidy-sqlite> tool prints to I<stdout> the SQL schema of the
-SQLite database I<DB> in an aesthetically pleasing way.
+SQLite database I<DB> in a consistent, aesthetically pleasing way. It
+can optionally write the tidied schema back to the database.
 
-=head1 OPTIONS
+This does I<not> replace the SQLite `.schema` command, which includes
+additional statements in its output to re-create the database
+accurately.
+
+=head1 ARGUMENTS & OPTIONS
 
 =over
+
+=item DB
+
+The filename of the SQLite database to tidy.
 
 =item --help
 
@@ -149,9 +173,9 @@ Print a help message and exit.
 
 =item --inplace
 
-Instead of printing the tidied SQL, actually tidy and sort the schema
-in I<DB>.  This has the effect of making the SQLite C<.dump> and
-C<.schema> commands produce a consistent output.
+Instead of printing the tidied SQL, actually sort and tidy the schema
+directly in I<DB>.  This has the effect of making the SQLite C<.dump>
+and C<.schema> commands produce a consistent output.
 
 B<Note:> this mucks about with the C<sqlite_master> table and can
 potentially corrupt your database! It is not recommend unless you have
