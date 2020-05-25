@@ -111,10 +111,12 @@ my $re = qr!
     | (END)$wb_re          (?{ $__doc->end_block( $^N );            })
     | ($inline_re)$wb_re   (?{ $__doc->add_inline($^N);             })
     | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N);            })
+
+    # Needs to be before $op_re so that '-' does get matched early
+    | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
     | ($op_re)       (?{ $__doc->add_op($^N);                 })
     | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N);             })
     | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
-    | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
     | ($passthru_re)       (?{ $__doc->add_passthru($^N);           })
     | ($expr_re)           (?{ $__doc->add_expr($^N);               })
     | ,                    (?{ $__doc->make_list;                   })
@@ -283,6 +285,9 @@ sub tree2sql {
                 }
                 elsif ( $ref eq 'Keywords' ) {
                     push @new, [ $t, $indent ];
+                }
+                elsif ( $ref eq 'Op' ) {
+                    push @new, [$t];
                 }
                 elsif ( $ref eq 'Comment' ) {
                     push @new, [ $t, $indent ];
