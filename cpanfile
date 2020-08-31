@@ -1,5 +1,9 @@
 #!perl
 
+requires 'Class::Inline';
+requires 'OptArgs2';
+requires 'Types::Standard';
+
 on configure => sub {
     requires 'ExtUtils::MakeMaker::CPANfile';
 };
