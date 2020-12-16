@@ -13,9 +13,9 @@ our $INLINE = {
         is      => 'rw',
         default => sub { $_[0] }
     },
-    indent => { is => 'rw', default => 4, },
-    latest => { isa => Maybe [Object], is => 'rw', weaken => 1, },
-    tokens => { is => 'rw', default => sub { [] }, },
+    indent => { is  => 'rw',           default => 4, },
+    latest => { isa => Maybe [Object], is      => 'rw', weaken => 1, },
+    tokens => { is  => 'rw',           default => sub { [] }, },
 };
 
 sub sqltidy {
@@ -259,13 +259,16 @@ sub tree2sql {
             push @new, $NL, [$indent], [ $first, $newindent ];
             my $COMMA = [','];
             foreach my $t (@items) {
-                if ( ref($t) eq 'Comment' ) {
+                if ( ref($t) eq 'Expr' ) {
+                    push @new, $COMMA, $NL, [$indent], [ $t, $newindent ];
+                    $COMMA = [','];
+                }
+                elsif ( ref($t) eq 'Comment' ) {
                     push @new, $COMMA, [$t];
                     $COMMA = [''];
                 }
                 else {
-                    push @new, $COMMA, $NL, [$indent], [ $t, $newindent ];
-                    $COMMA = [','];
+                    warn "unhandled type " . ref($t);
                 }
             }
         }
@@ -481,6 +484,7 @@ sub end_block {
 sub add_comment {
     my $self = shift;
     my $val  = shift;
+    $val =~ s/\n$//;
     $self->add( Comment->new(
         val    => $val,
         parent => $self->curr,
@@ -731,7 +735,7 @@ use Types::Standard (qw/Defined/);
 
 our $INLINE = {
     CLASS  => { inc      => 1, },
-    parent => { required => 1, weaken => 1, },
+    parent => { required => 1,       weaken   => 1, },
     val    => { isa      => Defined, required => 1, },
     tokens => { default  => sub { [ $_[0]->val ] }, },
 };
@@ -806,7 +810,7 @@ use warnings;
 
 our $INLINE = {
     CLASS  => { inc      => 1, },
-    parent => { required => 1, weaken => 1, },
+    parent => { required => 1,    weaken  => 1, },
     tokens => { is       => 'rw', default => sub { [] }, },
 };
 
@@ -842,7 +846,7 @@ use warnings;
 
 use Class::Inline {
     CLASS  => { inc      => 1, },
-    parent => { required => 1, weaken => 1, },
+    parent => { required => 1,    weaken  => 1, },
     tokens => { is       => 'rw', default => sub { [] }, },
 };
 
