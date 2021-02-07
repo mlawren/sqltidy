@@ -1,37 +1,40 @@
 NAME
-    SQL::Tidy - parse and prettify SQL text
+    sqltidy - format and indent SQL text
 
 SYNOPSIS
-        use SQL::Tidy;
-        my $sqlt   = SQL::Tidy->new(
-            indent    => 4,
-        );
-        my $sql = $sqlt->parse($SQL);
+        sqltidy FILE [OPTIONS...]
 
 DESCRIPTION
-    Parses SQL text and reformats it nicely indented.
+    The sqltidy tool reformat SQL in an aesthetically pleasing way. It
+    can be run stand-alone (passing a file as an argument) or can be run
+    in-place on code in your text editor.
 
-CONSTRUCTOR
-    The "new()" constructor takes the following arguments:
+    If "FILE" is passed as an argument to the script, the script will
+    non-destructively create a new, tidied version of the file, with the
+    extension .tdy appended to the original filename.
 
-    indent (scalar, default is four ' ' spaces)
-        How to indent each sub-level by when tidying.
+    If a filename is not passed, then the script will read from STDIN
+    and output the tidied SQL to STDOUT. This makes it suitable for
+    in-place edits in your favorite text editor.
 
-    preserve_leading (boolean, default is true)
-        Set to keep same overall indent as original.
+OPTIONS
+    --help
+        Print a help message and exit.
 
-    uppercase (boolean, default is true)
-        Set to uppercase SQL keywords when tidying.
+EXIT VALUE
+    This command exists with a value of 0 on success.
 
-ATTRIBUTES
-METHODS
-    parse($sql) -> $tidy_sql
-        Takes the input SQL text to be parsed and returns a tidy
-        version.
+SEE ALSO
+    sqltidy is a wrapper around the Perl SQL::Tidy package.
 
 AUTHOR
-    Mark Lawrence <nomad@null.net>.
+    Mark Lawrence <nomad@null.net>
 
 COPYRIGHT AND LICENSE
     Copyright 2020 Mark Lawrence <nomad@null.net>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
 
