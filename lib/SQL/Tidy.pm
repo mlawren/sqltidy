@@ -1009,5 +1009,5 @@ Mark Lawrence <nomad@null.net>.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2020 Mark Lawrence <nomad@null.net>
+Copyright 2020-2021 Mark Lawrence <nomad@null.net>
 
