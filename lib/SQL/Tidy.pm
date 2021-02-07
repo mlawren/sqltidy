@@ -25,6 +25,20 @@ sub sqltidy {
     $sql->tree2sql;
 }
 
+my $ws_re       = qr/ [\ \t] /x;
+my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
+my $wb_re       = qr/ \b | [\ \n \t] | $ /sx;
+my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
+my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
+my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
+my $passthru_re = qr/ $comment_re | $shell_re /x;
+my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
+                     | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
+my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
+my $identifier_re = qr/ (?: " [^"]* " | :? $word_re ) /x;
+my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
+my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
+
 my @OPERATORS = ( qw{
     || << >> <= >= == != <> * / % + - & | < > =
 } );
@@ -34,8 +48,7 @@ my @BOOLOPS = ( qw{
 } );
 
 # ORDER RANGE PARTITION EXLUDE ROWS GROUPS here because of Windows functions
-#my @STMT = (
-my @STMT = sort { length $b <=> length $a } (
+my @STMT = (
     qw/
       PARTITION SAVEPOINT COMPOUND FACTORED ROLLBACK ANALYZE EXPLAIN
       REINDEX RELEASE ATTACH COMMIT CREATE DELETE DETACH INSERT PRAGMA
@@ -47,7 +60,7 @@ my @STMT = sort { length $b <=> length $a } (
 # should be seen as function not keyword:
 # GROUP_CONCAT COALESCE REPLACE. The problem is with SELECT COALESCE(1,2)
 
-my @INLINE = sort { length $b <=> length $a } (
+my @INLINE = (
     qw/
       CONSTRAINT REFERENCES DATETIME DEFAULT
       FOREIGN INTEGER NOTNULL PRIMARY VARCHAR COLUMN ISNULL REGEXP UNIQUE
@@ -64,44 +77,39 @@ my @INLINE = sort { length $b <=> length $a } (
       CURRENT INDEXED NATURAL NOTHING
       TRIGGER VIRTUAL WITHOUT ACTION ALWAYS BEFORE ESCAPE EXCEPT EXISTS
       FILTER IGNORE OTHERS STORED
-      ABORT AFTER FIRST NULLS OUTER QUERY RAISE
+      ABORT FIRST NULLS OUTER QUERY RAISE
       TABLE USING CAST EACH FAIL
       FULL INTO LAST PLAN TEMP TIES VIEW
       ALL END ROW BY IF NO OF TO
 
-      /, 'on\\ delete', 'on\\ update'
+      /, 'ON DELETE', 'ON UPDATE', 'DEFAULT VALUES'
 );
 
-my @KEYWORDS = sort { length $b <=> length $a } (
+my @KEYWORDS = (
     qw/
       FROM INNER LEFT RIGHT JOIN WHERE GROUP HAVING UNION
       THEN ELSE CASE END ON SET FOR INSTEAD LIMIT OFFSET ADD DO RENAME
-      CROSS WINDOW
+      CROSS WINDOW RETURNING AFTER
       /
 );
 
-my $stmt_re     = join '|', @STMT;
-my $keywords_re = join '|', @KEYWORDS;
-my $inline_re   = join '|', @INLINE;
-my $boolop_re   = join '|', @BOOLOPS;
-my $op_re       = join '|', map { s{([|/*+])}{\\$1}gr } @OPERATORS;
+sub _lenorder {
+    map    { s/ +/$ws_re+/gr }           # more than single space for whitespace
+      map  { s{([|/*+])}{\\$1}gr }       # escape regex chars
+      sort { length $b <=> length $a }   # longest to shortest
+      @_;
+}
 
-my $ws_re       = qr/ [\ \t] /sx;
-my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
-my $wb_re       = qr/ \b | [\ \n \t] | $ /sx;
-my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
-my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
-my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
-my $passthru_re = qr/ $comment_re | $shell_re /x;
-my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
-                     | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
-my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
-my $identifier_re = qr/ (?: " [^"]* " | $word_re ) /x;
-my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
-my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
-my $expr_re       = qr/ $column_re | $string_re | $op_re | $num_re | \?  /x;
+my $stmt_re     = join '|', _lenorder @STMT;
+my $keywords_re = join '|', _lenorder @KEYWORDS;
+my $inline_re   = join '|', _lenorder @INLINE;
+my $boolop_re   = join '|', _lenorder @BOOLOPS;
+my $op_re       = join '|', _lenorder @OPERATORS;
+
+my $expr_re = qr/ $column_re | $string_re | $op_re | $num_re | \?  /x;
 
 our $__doc;
+
 my $re = qr!
   (?:
       (BEGIN)$wb_re        (?{ $__doc->start_begin($^N);            })
@@ -115,7 +123,7 @@ my $re = qr!
 
     # Needs to be before $op_re so that '-' does get matched early
     | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
-    | ($op_re)       (?{ $__doc->add_op($^N);                 })
+    | ($op_re)             (?{ $__doc->add_op($^N);                 })
     | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N);             })
     | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
     | ($passthru_re)       (?{ $__doc->add_passthru($^N);           })
