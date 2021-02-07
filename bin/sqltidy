@@ -186,7 +186,9 @@ This command exists with a value of 0 on success.
 
 =head1 SEE ALSO
 
-B<sqltidy> is a wrapper around the Perl L<SQL::Tidy> package.
+L<SQL::Tidy>(3pm) - Perl interface for formatting SQL
+
+L<sqltidy-sqlite>(1) - Tidy an SQLite database schema directly
 
 =head1 AUTHOR
 

@@ -25,7 +25,9 @@ EXIT VALUE
     This command exists with a value of 0 on success.
 
 SEE ALSO
-    sqltidy is a wrapper around the Perl SQL::Tidy package.
+    SQL::Tidy(3pm) - Perl interface for formatting SQL
+
+    sqltidy-sqlite(1) - Tidy an SQLite database schema directly
 
 AUTHOR
     Mark Lawrence <nomad@null.net>
