@@ -15,8 +15,6 @@ use Class::Inline {
     orig_fh  => { default => sub { select }, },
 };
 
-__PACKAGE__->new;
-
 our @CARP_NOT = (__PACKAGE__);
 
 sub _build_pager {
@@ -50,6 +48,8 @@ sub open {
     return unless -t $self->orig_fh and !$self->fh->opened;
 
     my $pager = $self->pager;
+    local $ENV{LANG}   //= $self->encoding;
+    local $ENV{LC_ALL} //= $self->encoding;
 
     my $pid = CORE::open( $self->fh, '|-', $pager )
       or Carp::croak "Could not pipe to PAGER ('$pager'): $!\n";
