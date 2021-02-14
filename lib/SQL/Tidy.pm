@@ -112,8 +112,7 @@ our $__doc;
 
 my $re = qr!
   (?:
-      (BEGIN)$wb_re        (?{ $__doc->start_begin($^N);            })
-    | ($stmt_re)$wb_re     (?{ $__doc->start_stmt($^N);             })
+    ($stmt_re)$wb_re       (?{ $__doc->start_stmt($^N);             })
     | \(                   (?{ $__doc->start_block( qw/ ( ) / );    })
     | (\))                 (?{ $__doc->end_block( $^N );            })
     | (CASE)$wb_re         (?{ $__doc->start_case();                })
@@ -406,30 +405,6 @@ sub start_function {
     $self->curr($block);
 }
 
-sub start_begin {
-    my $self = shift;
-    my $val  = shift;
-
-    return $self->start_stmt($val) unless $self->in_statement;
-
-    # must be a Trigger
-    $self->add_keyword('begin');
-
-    my $block = Block->new(
-        val      => '',
-        endval   => 'end',
-        real_end => Keywords->new(
-            val    => 'end',
-            parent => $self->curr,
-        ),
-        parent => $self->curr,
-    );
-
-    $self->add($block);
-    $self->curr($block);
-    return;
-}
-
 sub start_case {
     my $self = shift;
 
@@ -564,10 +539,25 @@ sub start_stmt {
         my $stmt = Statement->new( parent => $self->curr );
         $self->add($stmt);
         $self->curr($stmt);
+        $self->add_keyword($val);
     }
+    elsif ( $val =~ m/^begin$/i ) {
+        $self->add_keyword($val);
 
-    # break out
-    else {
+        my $block = Block->new(
+            val      => '',
+            endval   => 'end',
+            real_end => Keywords->new(
+                val    => 'end',
+                parent => $self->curr,
+            ),
+            parent => $self->curr,
+        );
+
+        $self->add($block);
+        $self->curr($block);
+    }
+    else {    # break out
         until (
                  $self->curr_isa('Statement')
               or $self->curr_isa('Block')
@@ -582,9 +572,9 @@ sub start_stmt {
             $self->add($stmt);
             $self->curr($stmt);
         }
-    }
 
-    $self->add_keyword($val);
+        $self->add_keyword($val);
+    }
 }
 
 sub end_stmt {
