@@ -765,37 +765,10 @@ package Expr;
 use parent 'Tokens';
 
 package List;
-use strict;
-use warnings;
-
-use Class::Inline {
-    CLASS  => { inc      => 1, },
-    parent => { required => 1,    weaken  => 1, },
-    tokens => { is       => 'rw', default => sub { [] }, },
-};
-
-sub add {
-    my $self = shift;
-    my $val  = shift;
-    return push @{ $self->tokens }, $val;
-}
+use parent 'Tokens';
 
 package Statement;
-use strict;
-use warnings;
-use Class::Inline {
-    CLASS  => { inc      => 1, },
-    parent => { required => 1, },
-    tokens => { is       => 'rw', default => sub { [] }, },
-
-    #    lead   => { required => 1, },
-};
-
-sub add {
-    my $self = shift;
-    my $val  = shift;
-    push @{ $self->tokens }, $val;
-}
+use parent 'Tokens';
 
 package Block;
 use strict;
