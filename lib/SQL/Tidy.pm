@@ -1,19 +1,20 @@
 #!/usr/bin/env perl
-package SQL::Tidy;
 use strict;
 use warnings;
+
+package SQL::Tidy;
 use Carp ();
 use Scalar::Util 'refaddr';
 use Types::Standard (qw/Maybe Object/);
 use Class::Inline {
-    CLASS => { inc => 1, },
-    curr  => {
+    curr => {
         is      => 'rw',
         default => sub { $_[0] }
     },
+    debug  => { is  => 'rw' },
     indent => { is  => 'rw',           default => 4, },
     latest => { isa => Maybe [Object], is      => 'rw', weaken => 1, },
-    tokens => { is  => 'rw',           default => sub { [] }, },
+    parts  => { is  => 'rw',           default => sub { [] }, },
 };
 
 our $VERSION = '0.0.1';
@@ -24,20 +25,6 @@ sub sqltidy {
     $sql->parse($messy);
     $sql->tree2sql;
 }
-
-my $ws_re       = qr/ [\ \t] /x;
-my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
-my $wb_re       = qr/ \b | [\ \n \t] | $ /sx;
-my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
-my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
-my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
-my $passthru_re = qr/ $comment_re | $shell_re /x;
-my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
-                     | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
-my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
-my $identifier_re = qr/ (?: " [^"]* " | :? $word_re ) /x;
-my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
-my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
 
 my @OPERATORS = ( qw{
     || << >> <= >= == != <> * / % + - & | < > =
@@ -64,7 +51,7 @@ my @INLINE = (
     qw/
       CONSTRAINT REFERENCES DATETIME DEFAULT
       FOREIGN INTEGER NOTNULL PRIMARY VARCHAR COLUMN ISNULL REGEXP UNIQUE
-      CHECK INDEX MATCH BLOB CHAR DESC GLOB LIKE NULL OVER TEXT ASC
+      CHECK INDEX MATCH BLOB CHAR DESC GLOB LIKE OVER TEXT ASC
       INT KEY NOT AS IN IS
 
       COLLATE
@@ -94,25 +81,39 @@ my @KEYWORDS = (
 );
 
 sub _lenorder {
-    map    { s/ +/$ws_re+/gr }           # more than single space for whitespace
+    map    { s/ +/[\ \t]+/gr }           # more than single space for whitespace
       map  { s{([|/*+])}{\\$1}gr }       # escape regex chars
       sort { length $b <=> length $a }   # longest to shortest
       @_;
 }
 
-my $stmt_re     = join '|', _lenorder @STMT;
-my $keywords_re = join '|', _lenorder @KEYWORDS;
-my $inline_re   = join '|', _lenorder @INLINE;
-my $boolop_re   = join '|', _lenorder @BOOLOPS;
-my $op_re       = join '|', _lenorder @OPERATORS;
+my $skeywords_re = join '|', _lenorder @STMT;
+my $keywords_re  = join '|', _lenorder @KEYWORDS;
+my $inline_re    = join '|', _lenorder @INLINE;
+my $boolop_re    = join '|', _lenorder @BOOLOPS;
+my $op_re        = join '|', _lenorder @OPERATORS;
 
-my $expr_re = qr/ $column_re | $string_re | $op_re | $num_re | \?  /x;
+my $ws_re       = qr/ [\ \t] /x;
+my $leadws_re   = qr/ (?m) ^ $ws_re+ /sx;
+my $wb_re       = qr/ \b | [\ \n \t] | $ /sx;
+my $scomment_re = qr/ $ws_re* -- \N* \n? /sx;
+my $comment_re  = qr/ \n? \/\* .*? (?: \*\/ | $ ) \n? /sx;
+my $shell_re    = qr/ (?m) ^\. \N* \n? /mx;
+my $passthru_re = qr/ $comment_re | $shell_re /x;
+my $num_re      = qr/  (?: [0-9]+ (?: \. [0-9]*)? (?: e[+-]? [0-9]+ )? )
+                     | (?: \. [0-9]+ (?: e[+-]? [0-9]+ )? ) /x;
+
+my $string_re     = qr/ [xX]? ' (?: '' | [^'] )* ' /x;
+my $word_re       = qr/ [_a-zA-Z] [_a-zA-Z0-9]* /x;
+my $identifier_re = qr/ (?: " [^"]* " | :? $word_re ) /x;
+my $column_re     = qr/ (?: $identifier_re \.){0,2} (?: $identifier_re | \* )/x;
+my $token_re      = qr/ $column_re | $string_re | $op_re | $num_re | \?  /x;
 
 our $__doc;
 
 my $re = qr!
   (?:
-    ($stmt_re)$wb_re       (?{ $__doc->start_stmt($^N);             })
+    ($skeywords_re)$wb_re  (?{ $__doc->start_stmt($^N);             })
     | \(                   (?{ $__doc->start_block( qw/ ( ) / );    })
     | (\))                 (?{ $__doc->end_block( $^N );            })
     | (CASE)$wb_re         (?{ $__doc->start_case();                })
@@ -121,14 +122,14 @@ my $re = qr!
     | ($keywords_re)$wb_re (?{ $__doc->add_keyword($^N);            })
 
     # Needs to be before $op_re so that '-' does get matched early
-    | ($scomment_re)       (?{ $__doc->add_comment($^N);            })
+    | ($scomment_re|$comment_re)       (?{ $__doc->add_comment($^N);            })
     | ($op_re)             (?{ $__doc->add_op($^N);                 })
     | ($boolop_re)$wb_re   (?{ $__doc->add_boolop($^N);             })
     | ($word_re)\s*\(      (?{ $__doc->start_function( $^N.'(', ')' ); })
-    | ($passthru_re)       (?{ $__doc->add_passthru($^N);           })
-    | ($expr_re)           (?{ $__doc->add_expr($^N);               })
+    | ($passthru_re)       (?{ $__doc->add_rest($^N);               })
+    | ($token_re)          (?{ $__doc->add_expr($^N);               })
     | ,                    (?{ $__doc->make_list;                   })
-    | ;                    (?{ $__doc->end_stmt(';');               })
+    | ;$wb_re              (?{ $__doc->end_stmt(';');               })
     | ($leadws_re)         (?{ $__doc->add_leadws($^N);             })
     | (\s*\n | $ws_re+)    (?{ $__doc->add_ws($^N);                 })
     | (.)                  (?{ $__doc->add_rest($^N);               })
@@ -151,7 +152,7 @@ sub _reset {
     my $self = shift;
     $self->curr($self);
     $self->latest(undef);
-    $self->tokens( [] );
+    $self->parts( [] );
 }
 
 sub tidy {
@@ -169,31 +170,33 @@ sub parse {
 
     die "coult not parse input as SQLite SQL\n"
       unless my @list = $messy =~ m/$re/g;
+
+    #$_->_dump(10) for @{$self->parts};;
 }
 
 sub tree2ast {
     my $self  = shift;
-    my $clean = '';
+    my $node  = shift // $self;
+    my $clean = '-' x 70 . "\n";
     my $depth = '';
-    my @tok   = map { [ $depth, $_ ] } @{ $self->tokens };
-    while ( my $t = shift @tok ) {
-        if ( ref( $t->[1] ) and $t->[1]->can('tokens') ) {
-            if ( $t->[1]->can('val') ) {
-                $clean .= '--| '
-                  . $t->[0]
-                  . ref( $t->[1] ) . ': \''
-                  . $t->[1]->val . "'\n";
+    my @parts = map { [ $depth, $_ ] } @{ $node->parts };
+
+    while ( my $p = shift @parts ) {
+        my ( $d, $part ) = @$p;
+        my ( $pos, $ref, $posiref, $total ) = $part->posiref;
+        if ($ref) {
+            $clean .= '--| ' . $d . $posiref;
+            if ( $part->can('tok') && length( my $tok = $part->tok ) ) {
+                $clean .= ': ' . ( $tok =~ s/\n/\\n/gr );
             }
-            else {
-                $clean .= '--| ' . $t->[0] . ref( $t->[1] ) . ': ' . "\n";
-            }
-            unshift @tok, map { [ $t->[0] . '  ', $_ ] } @{ $t->[1]->tokens };
+            $clean .= "\n";
+            unshift @parts, map { [ $d . '  ', $_ ] } @{ $part->parts };
         }
         else {
-            #                warn $t->[0] . $t->[1] . "\n";
+            warn 'XXXXXXXXXXX';    #.$t->[0] . $t->[1] . "\nXXXX";
         }
     }
-    $clean;
+    $clean . ( '-' x 70 ) . "\n";
 }
 
 sub tree2sql {
@@ -203,26 +206,36 @@ sub tree2sql {
     my $half  = ' ' x ( $self->indent / 2 );
     my $NL    = ["\n"];
     my $WS    = [' '];
-    my @tok   = map { [$_] } @{ $self->tokens };
+    my @parts = map { [$_] } @{ $self->parts };
 
     my $lead_ws = '';
     my $tok     = 0;
-    while ( my $t = shift @tok ) {
+    my $depth   = 0;
+
+    while ( my $t = shift @parts ) {
         my ( $n, $ref, $indent ) =
           ( $t->[0], ref( $t->[0] ), $t->[1] // $lead_ws );
         my $newindent = $indent . $extra;
         my @new;
         $lead_ws = '';
 
-        if ( $ref eq 'Statement' ) {
-            my @list = @{ $n->tokens };
-            my $i    = 0;
-            while ( my $t = shift @list ) {
-                $ref = ref($t);
-                $i++;
+        if ( not defined $n ) {
+            warn "undefined token in the stream "
+              . join( ',', map { $_->[0] } @parts );
+        }
+        elsif ( $ref eq '' ) {
+            $clean .= $n;
+        }
+        elsif ( $ref eq 'Statement' ) {
+            $clean .= $self->tree2ast($n) . "\n"
+              if $self->debug and $n->parent eq $self;
 
-                if ( ref($t) eq 'Keywords' ) {
-                    push @new, $i > 1 ? $NL : (), [$indent], [$t];
+            foreach my $t ( @{ $n->parts } ) {
+                my ( $pos, $ref, $posiref, $total ) = $t->posiref;
+
+                if ( $ref eq 'Keyword' ) {
+                    push @new, $NL if $pos ne 'a';
+                    push @new, [$indent], [$t];
                 }
                 elsif ( $ref eq 'List' ) {
                     push @new, [ $t, $newindent ];
@@ -234,10 +247,10 @@ sub tree2sql {
                     push @new, $WS, [ $t, $indent ];
                 }
                 elsif ( $ref eq 'Block' ) {
-                    push @new, ( length $t->val ? $WS : () ),
+                    push @new, $WS,    #( length $t->tok ? $WS : () ),
                       [ $t, $indent . $extra ];
                 }
-                elsif ( $ref eq 'Tokens' ) {
+                elsif ( $ref eq 'Token' ) {
                     push @new, [ $t, $newindent ];
                 }
                 elsif ( $ref eq 'Comment' ) {
@@ -262,11 +275,12 @@ sub tree2sql {
             }
         }
         elsif ( $ref eq 'List' ) {
-            my @items = @{ $n->tokens };
+            my @items = @{ $n->parts };
             my $first = shift @items;
             push @new, $NL, [$indent], [ $first, $newindent ];
             my $COMMA = [','];
             foreach my $t (@items) {
+                warn $t->posiref;
                 if ( ref($t) eq 'Expr' ) {
                     push @new, $COMMA, $NL, [$indent], [ $t, $newindent ];
                     $COMMA = [','];
@@ -281,25 +295,29 @@ sub tree2sql {
             }
         }
         elsif ( $ref eq 'Block' or $ref eq 'Function' ) {
-            push @new, [ $n->val ];
-            my @list    = @{ $n->tokens };
-            my $i       = 0;
+            push @new, $n->tokens;
+            my @list    = @{ $n->parts };
             my $complex = 0;
             foreach my $t (@list) {
-                my $ref = ref($t);
-                if ( $ref eq 'Expr' ) {
-                    push @new, @list > 1 ? $WS : (), [ $t, $indent ];
+                my ( $pos, $ref, $posiref, $total ) = $t->posiref;
+                if ( $ref eq 'Token' ) {
+                    push @new, [ $t, $indent ];
+                }
+                elsif ( $ref eq 'Expr' ) {
+                    push @new, $WS unless $pos eq 'a';
+                    push @new, [ $t, $indent ];
                 }
                 elsif ( $ref eq 'List' ) {
                     push @new, [ $t, $indent ];
                     $complex++;
                 }
-                elsif ( $ref eq 'Keywords' ) {
+                elsif ( $ref eq 'Keyword' ) {
                     push @new, [ $t, $indent ];
                 }
-                elsif ( $ref eq 'Op' ) {
-                    push @new, [$t];
-                }
+
+                #                elsif ( $ref eq 'Op' ) {
+                #                    push @new, [$t];
+                #                }
                 elsif ( $ref eq 'Comment' ) {
                     push @new, [ $t, $indent ];
                 }
@@ -309,20 +327,19 @@ sub tree2sql {
                 }
                 else {
                     warn 'unhandled Block/Function->' . $ref;
-                    push @new, $WS, [ $t, $indent ];
+                    push @new, ["/* unhandled Block/Function: $t */"], $WS,
+                      [ $t, $indent ];
                 }
-                $i++;
             }
             push @new,
               ( $complex ? ( $NL, [ $half . $indent =~ s/$extra//r ] ) : () ),
               [ $n->end ];
         }
         elsif ( $ref eq 'Expr' ) {
-            my @list = @{ $n->tokens };
-            my $i    = 1;
-            foreach my $t (@list) {
+            my $i = 1;
+            foreach my $t ( @{ $n->parts } ) {
                 if ( ref($t) eq 'Block' ) {
-                    push @new, ( $i > 1 ? $WS : () ), [ $t, $indent ];
+                    push @new, ( $i > 1 ? $WS : () ), [ $t, $newindent ];
                 }
                 elsif ( ref($t) eq 'Statement' ) {    # CASE ... END
                     push @new, [ $t, $indent ];
@@ -339,46 +356,31 @@ sub tree2sql {
                 $i++;
             }
         }
-        elsif ( $ref eq 'Keywords' or $ref eq 'Inline' or $ref eq 'BoolOp' ) {
-            $clean .= uc "@{$n->tokens}";
-        }
-        elsif ( $ref eq 'Tokens' ) {
-            $clean .= "@{$n->tokens}";
-        }
-        elsif ( $ref eq 'Comment' ) {
-            $clean .= $n->val;
-        }
-        elsif ( $ref eq 'EOS' ) {
-            $clean .= $n->tokens->[0] . "\n";
+        elsif ( $n->isa('Keyword') ) {
+            $clean .= uc $n->tok;
         }
         elsif ( $ref eq 'Indent' ) {
-            $lead_ws = $n->tokens->[0] =~ s/\t/$extra/gr;
+            $lead_ws = $n->tok =~ s/\t/$extra/gr;
         }
-        elsif ( $ref eq 'Op' ) {
-            $clean .= $n->tokens->[0];
+        elsif ( $n->can('tok') ) {
+            $clean .= $n->tok;
+            $clean .= "\n" if $ref eq 'EOS';
         }
-        elsif ( $ref eq 'NotSQL' ) {
-            $clean .= join '', @{ $n->tokens };
-        }
-        else {
-            # warn "unhandled X${n}X" unless;
-            $clean .= $n;
-        }
-        unshift @tok, @new;
+        unshift @parts, @new;
     }
     return $clean;
 }
 
-sub add {
+sub add_part {
     my $self = shift;
     my $val  = shift;
     Carp::confess 'junk not a ref ' . $val unless ref $val;
 
     if ( refaddr( $self->curr ) != refaddr($self) ) {
-        $self->curr->add($val);
+        $self->curr->add_part($val);
     }
     else {
-        push @{ $self->tokens }, $val;
+        push @{ $self->parts }, $val;
     }
 
     $self->latest($val);
@@ -391,56 +393,80 @@ sub start_function {
 
     unless ( $self->curr_isa('Expr') ) {
         my $e = Expr->new( parent => $self->curr );
-        $self->add($e);
+        $self->add_part($e);
         $self->curr($e);
     }
 
     my $block = Function->new(
-        val    => $start,
-        endval => $end,
+        match => $end,
+        end   => Token->new(
+            tokens => [$end],
+            parent => $self->curr,
+        ),
         parent => $self->curr,
     );
 
-    $self->add($block);
+    $block->add_part( Token->new(
+        tokens => [$start],
+        parent => $block,
+    ) );
+
+    $self->add_part($block);
     $self->curr($block);
 }
 
 sub start_case {
     my $self = shift;
 
-    $self->start_block(
-        Keywords->new(
-            val    => 'case',
-            parent => $self->curr,
-        ),
-        'end',
-        Keywords->new(
-            val    => 'end',
-            parent => $self->curr,
-        ),
-    );
-}
-
-sub start_block {
-    my $self     = shift;
-    my $start    = shift;
-    my $end      = shift;
-    my $real_end = shift;
-
     unless ( $self->curr_isa('Expr') ) {
         my $e = Expr->new( parent => $self->curr );
-        $self->add($e);
+        $self->add_part($e);
         $self->curr($e);
     }
 
     my $block = Block->new(
-        val      => $start,
-        endval   => $end,
-        real_end => $real_end,
-        parent   => $self->curr,
+        match => 'end',
+        end   => Keyword->new(
+            tokens => ['end'],
+            parent => $self->curr,    # TODO change to add_end()
+        ),
+        parent => $self->curr,
     );
 
-    $self->add($block);
+    $block->add_part( Keyword->new(
+        tokens => ['case'],
+        parent => $block,
+    ) );
+
+    $self->add_part($block);
+    $self->curr($block);
+}
+
+sub start_block {
+    my $self  = shift;
+    my $start = shift;
+    my $end   = shift;
+
+    unless ( $self->curr_isa('Expr') ) {
+        my $e = Expr->new( parent => $self->curr );
+        $self->add_part($e);
+        $self->curr($e);
+    }
+
+    my $block = Block->new(
+        match => $end,
+        end   => Token->new(
+            tokens => [$end],
+            parent => $self->curr,
+        ),
+        parent => $self->curr,
+    );
+    $block->add_part( Token->new(
+        tokens => [$start],
+        parent => $block,
+    ) );
+
+    $self->add_part($block);
     $self->curr($block);
 }
 
@@ -449,7 +475,7 @@ sub end_block {
     my $end  = shift;
     if ( my $curr = $self->curr ) {
         while ( refaddr($curr) != refaddr($self) ) {
-            if ( $curr->isa('Block') && lc( $curr->endval ) eq lc($end) ) {
+            if ( $curr->isa('Block') && lc( $curr->match ) eq lc($end) ) {
                 $self->curr( $curr->parent // $self );
                 $self->latest( $self->curr );
                 return;
@@ -459,8 +485,8 @@ sub end_block {
     }
 
     # did not find the start block!
-    $self->add( Tokens->new(
-        val    => $end . ' /* UNEXPECTED */',
+    $self->add_part( Part->new(
+        tokens => [ $end . ' /* UNEXPECTED */' ],
         parent => $self->curr
     ) );
 }
@@ -469,17 +495,8 @@ sub add_comment {
     my $self = shift;
     my $val  = shift;
     $val =~ s/\n$//;
-    $self->add( Comment->new(
-        val    => $val,
-        parent => $self->curr,
-    ) );
-}
-
-sub add_passthru {
-    my $self = shift;
-    my $val  = shift;
-    $self->add( NotSQL->new(
-        val    => $val,
+    $self->add_part( Comment->new(
+        tokens => [ $val . "\n" ],
         parent => $self->curr,
     ) );
 }
@@ -487,8 +504,8 @@ sub add_passthru {
 sub add_token {
     my $self = shift;
     my $val  = shift;
-    $self->add( Tokens->new(
-        val    => $val,
+    $self->add_part( Part->new(
+        tokens => [$val],
         parent => $self->curr,
     ) );
 }
@@ -508,10 +525,10 @@ sub add_keyword {
     my $self = shift;
     my $val  = shift;
 
-    if (    $self->latest_isa('Keywords')
+    if (    $self->latest_isa('Keyword')
         and $self->latest->parent eq $self->curr )
     {
-        $self->latest->add($val);
+        $self->latest->add_token($val);
         return;
     }
     else {    # break out of a List or Expr
@@ -525,8 +542,8 @@ sub add_keyword {
         }
     }
 
-    $self->add( Keywords->new(
-        val    => $val,
+    $self->add_part( Keyword->new(
+        tokens => [$val],
         parent => $self->curr,
     ) );
 }
@@ -537,24 +554,29 @@ sub start_stmt {
 
     if ( not $self->in_statement ) {
         my $stmt = Statement->new( parent => $self->curr );
-        $self->add($stmt);
+        $self->add_part($stmt);
         $self->curr($stmt);
         $self->add_keyword($val);
     }
     elsif ( $val =~ m/^begin$/i ) {
-        $self->add_keyword($val);
+
+        #        $self->add_keyword($val);
 
         my $block = Block->new(
-            val      => '',
-            endval   => 'end',
-            real_end => Keywords->new(
-                val    => 'end',
+            match => 'end',
+            end   => Keyword->new(
+                tokens => ['end'],
                 parent => $self->curr,
             ),
             parent => $self->curr,
         );
 
-        $self->add($block);
+        $block->add_part( Keyword->new(
+            tokens => [$val],
+            parent => $block,
+        ) );
+
+        $self->add_part($block);
         $self->curr($block);
     }
     else {    # break out
@@ -569,7 +591,7 @@ sub start_stmt {
 
         if ( $self->curr_isa('Block') ) {
             my $stmt = Statement->new( parent => $self->curr );
-            $self->add($stmt);
+            $self->add_part($stmt);
             $self->curr($stmt);
         }
 
@@ -582,17 +604,17 @@ sub end_stmt {
     my $val  = shift;
 
     if ( my $stmt = $self->in_statement ) {
-        $stmt->add( EOS->new(
-            val    => $val,
-            parent => $self->curr,
+        $stmt->add_part( EOS->new(
+            tokens => [$val],
+            parent => $stmt,
         ) );
         $self->curr( $stmt->parent );
         return;
     }
 
     # warn or not?
-    $self->add( EOS->new(
-        val    => $val,
+    $self->add_part( EOS->new(
+        tokens => [$val],
         parent => $self->curr,
     ) );
 }
@@ -602,7 +624,10 @@ sub add_leadws {
     my $val  = shift;
 
     return if $self->in_statement;
-    $self->add( Indent->new( val => $val, parent => $self->curr ) );
+    $self->add_part( Indent->new(
+        tokens => [$val],
+        parent => $self->curr,
+    ) );
 }
 
 sub add_ws {
@@ -610,8 +635,8 @@ sub add_ws {
     my $val  = shift;
 
     return if $self->in_statement;
-    $self->add( NotSQL->new(
-        val    => $val =~ m/\n/ ? "\n" : $val,
+    $self->add_part( NotSQL->new(
+        tokens => [ $val =~ m/\n/ ? "\n" : $val ],
         parent => $self->curr,
     ) );
 }
@@ -619,37 +644,46 @@ sub add_ws {
 sub add_op {
     my $self = shift;
     my $val  = shift;
-    $self->add( Op->new( val => $val, parent => $self->curr, ) );
+    $self->add_part( Op->new(
+        tokens => [$val],
+        parent => $self->curr,
+    ) );
 }
 
 sub add_boolop {
     my $self = shift;
     my $val  = shift;
-    $self->add( BoolOp->new( val => $val, parent => $self->curr, ) );
+    $self->add_part( BoolOp->new(
+        tokens => [$val],
+        parent => $self->curr,
+    ) );
 }
 
 sub add_inline {
     my $self = shift;
     my $val  = shift;
 
-    if ( $self->latest_isa('Inline') or $self->latest_isa('Keywords') ) {
-        $self->latest->add($val);
+    if ( $self->latest_isa('Inline') or $self->latest_isa('Keyword') ) {
+        $self->latest->add_token($val);
         return;
     }
 
     unless ( $self->curr_isa('Expr') ) {
         unless ( $self->in_statement ) {
             my $stmt = Statement->new( parent => $self->curr, );
-            $self->add($stmt);
+            $self->add_part($stmt);
             $self->curr($stmt);
         }
 
         my $e = Expr->new( parent => $self->curr );
-        $self->add($e);
+        $self->add_part($e);
         $self->curr($e);
     }
 
-    $self->add( Inline->new( val => $val, parent => $self->curr, ) );
+    $self->add_part( Inline->new(
+        tokens => [$val],
+        parent => $self->curr,
+    ) );
 }
 
 sub make_list {
@@ -661,18 +695,18 @@ sub make_list {
         $self->latest($parent);
     }
     elsif ( $self->curr_isa('Expr') ) {
-        my $bottom = delete $parent->tokens->[-1];
+        my $bottom = delete $parent->parts->[-1];
         my $middle = List->new( parent => $parent );
-        $parent->add($middle);
-        $middle->add($bottom);
+        $parent->add_part($middle);
+        $middle->add_part($bottom);
         $self->curr($middle);
         $self->latest($middle);
     }
     elsif ( $self->curr_isa('Statement') ) {
-        my $bottom = delete $self->curr->tokens->[-1];
+        my $bottom = delete $self->curr->parts->[-1];
         my $list   = List->new( parent => $self->curr );
-        $self->add($list);
-        $list->add($bottom);
+        $self->add_part($list);
+        $list->add_part($bottom);
         $self->curr($list);
         $self->latest($bottom);
     }
@@ -687,10 +721,13 @@ sub add_expr {
 
     unless ( $self->curr_isa('Expr') ) {
         my $e = Expr->new( parent => $self->curr );
-        $self->add($e);
+        $self->add_part($e);
         $self->curr($e);
     }
-    $self->add( Tokens->new( val => $val, parent => $self->curr, ) );
+    $self->add_part( Token->new(
+        tokens => [$val],
+        parent => $self->curr,
+    ) );
 }
 
 sub add_rest {
@@ -698,100 +735,114 @@ sub add_rest {
     my $val  = shift;
 
     warn "unknown SQL token '$val'" if $self->in_statement;
-    $self->add( NotSQL->new(
-        val    => $val,
+    $self->add_part( NotSQL->new(
+        tokens => [$val],
         parent => $self->curr,
     ) );
 }
 
-package Tokens;
-use strict;
-use warnings;
-use Types::Standard (qw/Defined/);
+package Part;
 use Class::Inline {
-    CLASS  => { inc      => 1, },
-    parent => { required => 1,       weaken    => 1, },
-    val    => { isa      => Defined, predicate => 1 },
-    tokens => { default  => sub { [] }, },
+    parent => {
+        is       => 'rw',
+        required => 1,
+        weaken   => 1,
+    },
+    parts => { default => sub { [] }, },
+    path  => {
+        is      => 'rw',
+        lazy    => 0,
+        default => sub {
+            my $self = shift;
+            if ( 'SQL::Tidy' ne ref $self->parent ) {
+                $self->parent->path . '.' . ref $self;
+            }
+            else {
+                ref $self;
+            }
+        }
+    },
+    posi => { is => 'rw' },
 };
 
-sub BUILD {
+sub add_part {
     my $self = shift;
-    $self->add( $self->val ) if $self->has_val;
+    my $val  = shift;
+    push( @{ $self->parts }, $val );
+    $val->parent($self);
+    $val->posi( scalar( @{ $self->parts } ) );
 }
 
-sub add {
+sub posiref {
+    my $self   = shift;
+    my $pcount = @{ $self->parent->parts };
+    my $pos =
+        $self->posi == 1       ? 1
+      : $self->posi == $pcount ? 'z'
+      :                          'n';
+    ( $pos, ref($self), $pos . '.' . ref($self), $pcount );
+}
+
+package Statement;
+use parent 'Part';
+
+package Indent;
+use parent 'Part';
+
+package Expr;
+use parent 'Part';
+
+package List;
+use parent 'Part';
+
+package Token;
+use parent 'Part';
+use Class::Inline { tokens => { default => sub { [] }, }, };
+
+sub add_token {
     my $self = shift;
     my $val  = shift;
     push( @{ $self->tokens }, $val );
-
 }
 
-BEGIN { $INC{'Tokens.pm'} = __FILE__; }
+sub tok {
+    my $self = shift;
+    join( ' ', @{ $self->tokens } );
+}
 
 package NotSQL;
-use parent 'Tokens';
+use parent 'Token';
+
+sub tok {
+    my $self = shift;
+    join '', @{ $self->tokens };
+}
 
 package Comment;
-use parent 'Tokens';
-
-package Keywords;
-use strict;
-use warnings;
-use parent 'Tokens';
-
-package Inline;
-use strict;
-use warnings;
-use parent 'Tokens';
+use parent 'Token';
 
 package Op;
-use strict;
-use warnings;
-use parent 'Tokens';
-
-package BoolOp;
-use strict;
-use warnings;
-use parent 'Tokens';
+use parent 'Token';
 
 package EOS;
-use parent 'Tokens';
+use parent 'Token';
 
-package Indent;
-use parent 'Tokens';
+package Keyword;
+use parent 'Token';
+BEGIN { $INC{'Keyword.pm'} = __FILE__ }
 
-package Expr;
-use parent 'Tokens';
+package Inline;
+use parent 'Keyword';
 
-package List;
-use parent 'Tokens';
-
-package Statement;
-use parent 'Tokens';
+package BoolOp;
+use parent 'Keyword';
 
 package Block;
-use strict;
-use warnings;
+use parent 'Token';
 use Class::Inline {
-    CLASS    => { inc      => 1, },
-    val      => { required => 1, },
-    parent   => { required => 1, weaken => 1, },
-    endval   => { required => 1, },
-    real_end => { is       => 'rw' },
-    tokens   => { is       => 'rw', default => sub { [] }, },
+    match => { required => 1, },
+    end   => { required => 1, },
 };
-
-sub add {
-    my $self = shift;
-    my $val  = shift;
-    push @{ $self->tokens }, $val;
-}
-
-sub end {
-    my $self = shift;
-    $self->real_end // $self->endval;
-}
 
 package Function;
 use parent 'Block';

@@ -96,9 +96,14 @@ else {
 }
 
 require SQL::Tidy;
-my $sql = SQL::Tidy->new( indent => $opts->{indent} );
+my $sql = SQL::Tidy->new(
+    indent => $opts->{indent},
+    debug  => $opts->{debug},
+);
+
 $sql->parse( $opts->{sql} );
-my $output = ( $opts->{debug} ? $sql->tree2ast : '' ) . $sql->tree2sql;
+
+my $output = $sql->tree2sql;
 
 # TODO
 if ( $opts->{inplace} ) {
