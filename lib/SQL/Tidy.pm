@@ -5,16 +5,16 @@ use warnings;
 package SQL::Tidy;
 use Carp ();
 use Scalar::Util 'refaddr';
-use Types::Standard (qw/Maybe Object/);
+use Types::Standard (qw/Maybe Object Defined/);
 use Class::Inline {
     curr => {
         is      => 'rw',
         default => sub { $_[0] }
     },
-    debug  => { is  => 'rw' },
-    indent => { is  => 'rw',           default => 4, },
-    latest => { isa => Maybe [Object], is      => 'rw', weaken => 1, },
-    parts  => { is  => 'rw',           default => sub { [] }, },
+    debug  => { is  => 'rw',           default => 0, },
+    indent => { isa => Defined,        is      => 'rw', default => 4, },
+    latest => { isa => Maybe [Object], is      => 'rw', weaken  => 1, },
+    _parts => { is  => 'rw',           default => sub { [] }, },
 };
 
 our $VERSION = '0.0.1';
@@ -132,6 +132,7 @@ my $re = qr!
     | ;$wb_re              (?{ $__doc->end_stmt(';');               })
     | ($leadws_re)         (?{ $__doc->add_leadws($^N);             })
     | (\s*\n | $ws_re+)    (?{ $__doc->add_ws($^N);                 })
+    | \z                   (?{ $__doc->end_of_file();               })
     | (.)                  (?{ $__doc->add_rest($^N);               })
   )
 !ix;
@@ -152,7 +153,12 @@ sub _reset {
     my $self = shift;
     $self->curr($self);
     $self->latest(undef);
-    $self->parts( [] );
+    $self->_parts( [ SOF->new( parent => $self ) ] );
+}
+
+sub parts {
+    my $self = shift;
+    @{ $self->_parts };
 }
 
 sub tidy {
@@ -171,7 +177,7 @@ sub parse {
     die "coult not parse input as SQLite SQL\n"
       unless my @list = $messy =~ m/$re/g;
 
-    #$_->_dump(10) for @{$self->parts};;
+    #$_->_dump(10) for $self->parts;
 }
 
 sub tree2ast {
@@ -179,18 +185,18 @@ sub tree2ast {
     my $node  = shift // $self;
     my $clean = '-' x 70 . "\n";
     my $depth = '';
-    my @parts = map { [ $depth, $_ ] } @{ $node->parts };
+    my @parts = [ '', $node ], map { [ $depth . ' ', $_ ] } $node->parts;
 
     while ( my $p = shift @parts ) {
         my ( $d, $part ) = @$p;
-        my ( $pos, $ref, $posiref, $total ) = $part->posiref;
+        my $ref = ref $part;
         if ($ref) {
-            $clean .= '--| ' . $d . $posiref;
+            $clean .= '--| ' . $d . $ref;
             if ( $part->can('tok') && length( my $tok = $part->tok ) ) {
                 $clean .= ': ' . ( $tok =~ s/\n/\\n/gr );
             }
             $clean .= "\n";
-            unshift @parts, map { [ $d . '  ', $_ ] } @{ $part->parts };
+            unshift @parts, map { [ $d . '  ', $_ ] } $part->parts;
         }
         else {
             warn 'XXXXXXXXXXX';    #.$t->[0] . $t->[1] . "\nXXXX";
@@ -199,14 +205,113 @@ sub tree2ast {
     $clean . ( '-' x 70 ) . "\n";
 }
 
-sub tree2sql {
+my $D_ADD = bless {}, 'D_ADD';
+my $D_SUB = bless {}, 'D_SUB';
+my $NL    = bless {}, 'NL';
+
+my %node_rules = ();
+
+my %token_rules = (
+    'BoolOp.Token'    => ' ',
+    'Inline.Token'    => ' ',
+    'Keyword.Inline'  => ' ',
+    'Keyword.Keyword' => ' ',
+    'Keyword.Token'   => ' ',
+    'Op.Token'        => ' ',
+    'Token.BoolOp'    => ' ',
+
+    #    'Token.EOS'       => '',
+    'Token.Inline'  => ' ',
+    'Token.Keyword' => "\n",
+    'Token.Op'      => ' ',
+    'Token.Token'   => ' ',
+    'EOS.EOF'       => "\n",
+    'EOS.Keyword'   => "\n\n",
+    'SOF.Keyword'   => '',
+);
+
+sub tsql {
     my $self  = shift;
+    my $depth = '';
+    my $debug = $self->debug;
+
+    my $i          = 0;
+    my $total      = $self->parts;
+    my @parts      = map { $i++; [ $_, ref($_), $i, $total ] } $self->parts;
+    my $prev       = shift @parts;    # start of file (SOF)
+    my $prev_token = $prev;
+
+    my @e = ('');
+
+    #        push @e, $self->tree2ast() . "\n";
+
+    while ( my $aref = shift @parts ) {
+        my $n                      = $aref->[0];
+        my $prev_combination       = $prev->[1] . '.' . $aref->[1];
+        my $prev_token_combination = $prev_token->[1] . '.' . $aref->[1];
+
+        push @e,
+          ( length $e[-1] > 0 && $e[-1] !~ m/\n$/ ? "\n" : '' )
+          . $self->tree2ast($n) . "\n"
+          if $self->debug
+          and $aref->[1] eq 'Statement'
+          and ref( $n->parent ) eq 'SQL::Tidy';
+
+        use Data::Dumper;
+
+        sub d {
+            my $t = shift;
+            return 'undef' if not defined $t;
+            my $var = Dumper($t) =~ s/(^\$VAR1 = )|(;\n$)//gr;
+            $var =~ s/\n/\\n/g;
+            $var =~ s/^'([^ ]+)'$/"'".colored(['yellow'],$1)."'"/e;
+            $var =~ s/( )+/colored(['black on_yellow'],$1)/e;
+            $var;
+        }
+
+        my $match  = $node_rules{$prev_combination}        // undef;
+        my $tmatch = $token_rules{$prev_token_combination} // undef;
+
+        use Term::ANSIColor 'colored';
+        push @e, "/* $prev_combination: " . d($match) . " */\n"
+          if $prev_combination ne $prev_token_combination
+          and ( $debug == 2 and not defined $match )
+          or $debug > 2;
+
+        push @e, $match if defined $match;
+
+        if ( $n->can('tok') and length( my $tok = $n->tok ) ) {
+            push @e,
+              "/* (tokens) $prev_token_combination: " . d($tmatch) . ' */'
+              if ( $debug == 1 and not defined $tmatch )
+              or $debug > 1;
+
+            if ( defined $tmatch ) {
+                push @e, $tmatch;
+            }
+            push @e, colored( ['yellow'], $tok );
+            $prev_token = $aref;
+        }
+
+        $prev  = $aref;
+        $i     = 0;
+        $total = $n->parts;
+        my @newparts = map { $i++; [ $_, ref($_), $i, $total ] } $n->parts;
+        unshift @parts, @newparts;
+    }
+
+    join( '', @e );
+}
+
+sub tree2sql {
+    my $self = shift;
+    return $self->tsql;
     my $clean = '';
     my $extra = ' ' x $self->indent;
     my $half  = ' ' x ( $self->indent / 2 );
     my $NL    = ["\n"];
     my $WS    = [' '];
-    my @parts = map { [$_] } @{ $self->parts };
+    my @parts = map { [$_] } $self->parts;
 
     my $lead_ws = '';
     my $tok     = 0;
@@ -230,7 +335,7 @@ sub tree2sql {
             $clean .= $self->tree2ast($n) . "\n"
               if $self->debug and $n->parent eq $self;
 
-            foreach my $t ( @{ $n->parts } ) {
+            foreach my $t ( $n->parts ) {
                 my ( $pos, $ref, $posiref, $total ) = $t->posiref;
 
                 if ( $ref eq 'Keyword' ) {
@@ -275,7 +380,7 @@ sub tree2sql {
             }
         }
         elsif ( $ref eq 'List' ) {
-            my @items = @{ $n->parts };
+            my @items = $n->parts;
             my $first = shift @items;
             push @new, $NL, [$indent], [ $first, $newindent ];
             my $COMMA = [','];
@@ -296,7 +401,7 @@ sub tree2sql {
         }
         elsif ( $ref eq 'Block' or $ref eq 'Function' ) {
             push @new, $n->tokens;
-            my @list    = @{ $n->parts };
+            my @list    = $n->parts;
             my $complex = 0;
             foreach my $t (@list) {
                 my ( $pos, $ref, $posiref, $total ) = $t->posiref;
@@ -337,7 +442,7 @@ sub tree2sql {
         }
         elsif ( $ref eq 'Expr' ) {
             my $i = 1;
-            foreach my $t ( @{ $n->parts } ) {
+            foreach my $t ( $n->parts ) {
                 if ( ref($t) eq 'Block' ) {
                     push @new, ( $i > 1 ? $WS : () ), [ $t, $newindent ];
                 }
@@ -380,7 +485,7 @@ sub add_part {
         $self->curr->add_part($val);
     }
     else {
-        push @{ $self->parts }, $val;
+        push @{ $self->_parts }, $val;
     }
 
     $self->latest($val);
@@ -398,18 +503,14 @@ sub start_function {
     }
 
     my $block = Function->new(
-        match => $end,
-        end   => Token->new(
+        tokens => [$start],
+        match  => $end,
+        end    => Token->new(
             tokens => [$end],
             parent => $self->curr,
         ),
         parent => $self->curr,
     );
-
-    $block->add_part( Token->new(
-        tokens => [$start],
-        parent => $block,
-    ) );
 
     $self->add_part($block);
     $self->curr($block);
@@ -425,18 +526,19 @@ sub start_case {
     }
 
     my $block = Block->new(
-        match => 'end',
-        end   => Keyword->new(
+        tokens => ['case'],
+        match  => 'end',
+        end    => Keyword->new(
             tokens => ['end'],
             parent => $self->curr,    # TODO change to add_end()
         ),
         parent => $self->curr,
     );
 
-    $block->add_part( Keyword->new(
-        tokens => ['case'],
-        parent => $block,
-    ) );
+    #    $block->add_part( Keyword->new(
+    #        tokens => ['case'],
+    #        parent => $block,
+    #    ) );
 
     $self->add_part($block);
     $self->curr($block);
@@ -454,17 +556,19 @@ sub start_block {
     }
 
     my $block = Block->new(
-        match => $end,
-        end   => Token->new(
+        tokens => [$start],
+        match  => $end,
+        end    => Token->new(
             tokens => [$end],
             parent => $self->curr,
         ),
         parent => $self->curr,
     );
-    $block->add_part( Token->new(
-        tokens => [$start],
-        parent => $block,
-    ) );
+
+    #    $block->add_part( Token->new(
+    #        tokens => [$start],
+    #        parent => $block,
+    #    ) );
 
     $self->add_part($block);
     $self->curr($block);
@@ -619,6 +723,15 @@ sub end_stmt {
     ) );
 }
 
+sub end_of_file {
+    my $self = shift;
+    $self->curr($self);
+
+    $self->add_part( EOF->new(
+        parent => $self,
+    ) );
+}
+
 sub add_leadws {
     my $self = shift;
     my $val  = shift;
@@ -635,7 +748,7 @@ sub add_ws {
     my $val  = shift;
 
     return if $self->in_statement;
-    $self->add_part( NotSQL->new(
+    $self->add_part( WS->new(
         tokens => [ $val =~ m/\n/ ? "\n" : $val ],
         parent => $self->curr,
     ) );
@@ -695,7 +808,7 @@ sub make_list {
         $self->latest($parent);
     }
     elsif ( $self->curr_isa('Expr') ) {
-        my $bottom = delete $parent->parts->[-1];
+        my $bottom = delete $parent->_parts->[-1];
         my $middle = List->new( parent => $parent );
         $parent->add_part($middle);
         $middle->add_part($bottom);
@@ -703,7 +816,7 @@ sub make_list {
         $self->latest($middle);
     }
     elsif ( $self->curr_isa('Statement') ) {
-        my $bottom = delete $self->curr->parts->[-1];
+        my $bottom = delete $self->curr->_parts->[-1];
         my $list   = List->new( parent => $self->curr );
         $self->add_part($list);
         $list->add_part($bottom);
@@ -748,40 +861,22 @@ use Class::Inline {
         required => 1,
         weaken   => 1,
     },
-    parts => { default => sub { [] }, },
-    path  => {
-        is      => 'rw',
-        lazy    => 0,
-        default => sub {
-            my $self = shift;
-            if ( 'SQL::Tidy' ne ref $self->parent ) {
-                $self->parent->path . '.' . ref $self;
-            }
-            else {
-                ref $self;
-            }
-        }
-    },
-    posi => { is => 'rw' },
+    _parts => { default => sub { [] }, },
 };
 
 sub add_part {
     my $self = shift;
     my $val  = shift;
-    push( @{ $self->parts }, $val );
+    push( @{ $self->_parts }, $val );
     $val->parent($self);
-    $val->posi( scalar( @{ $self->parts } ) );
 }
 
-sub posiref {
-    my $self   = shift;
-    my $pcount = @{ $self->parent->parts };
-    my $pos =
-        $self->posi == 1       ? 1
-      : $self->posi == $pcount ? 'z'
-      :                          'n';
-    ( $pos, ref($self), $pos . '.' . ref($self), $pcount );
+sub parts {
+    @{ $_[0]->_parts };
 }
+
+package SOF;    # Start of File
+use parent 'Part';
 
 package Statement;
 use parent 'Part';
@@ -793,6 +888,15 @@ package Expr;
 use parent 'Part';
 
 package List;
+use parent 'Part';
+
+package EOF;
+use parent 'Part';
+
+package WS;
+use parent 'Part';
+
+package NL;
 use parent 'Part';
 
 package Token;
@@ -843,6 +947,11 @@ use Class::Inline {
     match => { required => 1, },
     end   => { required => 1, },
 };
+
+sub parts {
+    my $self = shift;
+    $self->SUPER::parts, $self->end;
+}
 
 package Function;
 use parent 'Block';
